@@ -1,0 +1,5 @@
+{
+  "name": "VeriDoc Compliance Automation",
+  "description": "An application to upload PDF policy documents, convert them into SQL rules using AI, and run compliance checks against a mock company database to flag and visualize violations.",
+  "requestFramePermissions": []
+}

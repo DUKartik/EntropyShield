@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8080"
+    volumes:
+      - ./backend:/app
+      - /home/gauravrao/.config/gcloud/application_default_credentials.json:/tmp/gcp_creds.json:ro
+    env_file:
+      - ./backend/.env
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcp_creds.json
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8080:8080"
+    depends_on:
+      - backend
+    environment:
+      - BACKEND_URL=http://backend:8080

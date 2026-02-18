@@ -1,0 +1,13 @@
+venv/
+venv
+__pycache__/
+__pycache__
+*.pyc
+.env
+.DS_Store
+.git
+.gitignore
+.gcloudignore
+README.md
+components/segformer/old_weights.pt
+uploads/
