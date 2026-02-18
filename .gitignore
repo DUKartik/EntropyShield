@@ -184,3 +184,5 @@ __pycache__/
 *.pth
 *.tar
 *.pt
+
+datasets/

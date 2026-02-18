@@ -69,7 +69,7 @@ const PolicyUploader: React.FC<{ onUploadSuccess: (policy: Policy) => void }> = 
         </div>
 
         {/* TAMPER TOGGLE */}
-        <div className="flex items-center gap-3 bg-card/50 border border-border p-3 rounded-full backdrop-blur-sm">
+        <div className="flex items-center gap-3 bg-white/5 border border-white/10 p-3 rounded-full backdrop-blur-md shadow-lg">
           <Switch
             id="tamper-mode"
             checked={checkTampering}
@@ -103,8 +103,8 @@ const PolicyUploader: React.FC<{ onUploadSuccess: (policy: Policy) => void }> = 
               className={cn(
                 "relative group flex flex-col items-center justify-center w-full h-80 rounded-xl border-2 border-dashed transition-all cursor-pointer overflow-hidden",
                 isDragging
-                  ? "border-primary bg-primary/5 scale-[1.01] shadow-2xl shadow-primary/20"
-                  : "border-border bg-card/50 hover:border-primary/50 hover:bg-card/80",
+                  ? "border-sky-400 bg-sky-400/5 scale-[1.01] shadow-2xl shadow-sky-400/20"
+                  : "border-white/10 bg-white/5 hover:border-sky-400/50 hover:bg-white/10",
                 mutation.isPending && "pointer-events-none opacity-80"
               )}
             >
@@ -137,7 +137,7 @@ const PolicyUploader: React.FC<{ onUploadSuccess: (policy: Policy) => void }> = 
               <div className="flex flex-col items-center space-y-4 p-6 text-center z-0">
                 <div className={cn(
                   "p-4 rounded-full transition-all duration-500",
-                  isDragging ? "bg-primary/20 text-primary" : "bg-muted text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary"
+                  isDragging ? "bg-sky-400/20 text-sky-400" : "bg-white/10 text-slate-400 group-hover:bg-sky-400/10 group-hover:text-sky-400"
                 )}>
                   <UploadCloud className="w-10 h-10" />
                 </div>
@@ -195,7 +195,7 @@ const PolicyUploader: React.FC<{ onUploadSuccess: (policy: Policy) => void }> = 
                   animate={{ opacity: 1, scale: 1 }}
                   transition={{ delay: i * 0.05 }}
                 >
-                  <Card className="h-full hover:border-primary/50 transition-colors bg-card/40 backdrop-blur-sm">
+                  <Card className="h-full hover:border-sky-400/50 transition-colors bg-white/5 backdrop-blur-md border-white/10 shadow-lg">
                     <CardHeader className="pb-3">
                       <div className="flex justify-between items-start">
                         <Badge variant="secondary" className="font-mono text-xs">{rule.rule_id}</Badge>

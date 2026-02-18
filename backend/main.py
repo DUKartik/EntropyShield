@@ -18,7 +18,7 @@ from utils.debug_logger import debug_router, get_logger
 
 # New Services for Compliance
 from services.database_connector import init_mock_db, execute_compliance_query, get_db_connection
-from services.policy_engine import extract_rules_from_text, save_policy, get_all_policies
+from services.policy_engine import extract_rules_from_text, save_policy, get_all_policies, seed_demo_policies
 from services.compliance_monitor import run_compliance_check
 
 # Initialize Logger
@@ -41,17 +41,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Lifespan: Failed to init mock DB: {e}")
 
-    # 1. Warmup TruFor Engine
-    # This loads the weights into memory so the first request doesn't timeout
+    # 1. Seed Demo Policies so System Scan works out-of-the-box
     try:
-        logger.info("Lifespan: Warming up TruFor Engine (this may take a moment)...")
-        from components.trufor.engine import TruForEngine
-        # Instantiating the singleton forces the model to load
-        TruForEngine()
-        logger.info("Lifespan: TruFor Engine Warmed Up Successfully.")
+        logger.info("Lifespan: Seeding demo compliance policies...")
+        seed_demo_policies()
+        logger.info("Lifespan: Demo policies ready.")
     except Exception as e:
-        logger.error(f"Lifespan: Failed to warm up TruFor: {e}")
-        # We don't raise here to allow the app to start even if TruFor fails (it will fail gracefully on request)
+        logger.error(f"Lifespan: Failed to seed demo policies: {e}")
+
+    # 2. TruFor Engine is now Lazy-Loaded on demand
+    # We skip pre-loading to improve startup time.
 
     yield
     # Shutdown
@@ -519,7 +518,7 @@ def preview_database():
         cursor = conn.cursor()
         
         data = {}
-        tables = ["expenses", "employees", "contracts"]
+        tables = ["expenses", "employees", "financial_transactions", "gdpr_violations"]
         for table in tables:
             cursor.execute(f"SELECT * FROM {table} LIMIT 10")
             rows = cursor.fetchall()
@@ -528,6 +527,51 @@ def preview_database():
         conn.close()
         return data
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/system/stats")
+def get_system_stats():
+    """
+    Returns aggregated system statistics for the dashboard.
+    """
+    try:
+        # 1. Active Policies
+        policies = get_all_policies()
+        active_policies = len([p for p in policies.values() if p.get("active", True)])
+
+        # 2. Total Violations & Risk Score
+        # Re-using compliance check logic. In prod, cache this.
+        compliance_results = run_compliance_check()
+        total_violations = compliance_results.get("total_violations", 0)
+        
+        # Risk Logic
+        high_risk_count = len([v for v in compliance_results.get("details", []) if v.get("severity") == "HIGH"])
+        risk_score = "Low"
+        if high_risk_count > 0:
+            risk_score = "High"
+        elif total_violations > 5:
+            risk_score = "Medium"
+
+        # 3. Real-time Events (Transactions count)
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        # count entries in financial_transactions
+        try:
+             cursor.execute("SELECT COUNT(*) FROM financial_transactions")
+             total_transactions = cursor.fetchone()[0]
+        except:
+             total_transactions = 0
+        conn.close()
+
+        return {
+            "risk_score": risk_score,
+            "total_violations": total_violations,
+            "active_policies": active_policies,
+            "real_time_events": total_transactions
+        }
+    except Exception as e:
+        logger.error(f"Stats Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

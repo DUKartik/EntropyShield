@@ -107,3 +107,64 @@ def save_policy(policy_id, name, rules):
 
 def get_all_policies():
     return _active_policies
+
+def seed_demo_policies():
+    """
+    Seeds built-in demo compliance policies so the system scan works
+    out-of-the-box without requiring a manual policy upload.
+    Only seeds if no policies are currently loaded.
+    """
+    if _active_policies:
+        return  # Already have policies, don't overwrite
+
+    demo_rules = [
+        {
+            "rule_id": "GDPR-001",
+            "description": "High-value GDPR violations (fines over €1M)",
+            "quote": "Data controllers must pay fines proportionate to the violation.",
+            "sql_query": "SELECT * FROM gdpr_violations WHERE \"Price (EUR)\" > 1000000",
+            "severity": "HIGH"
+        },
+        {
+            "rule_id": "GDPR-002",
+            "description": "Violations by large companies (fine > €500K)",
+            "quote": "Large enterprises face higher penalties under GDPR.",
+            "sql_query": "SELECT * FROM gdpr_violations WHERE \"Price (EUR)\" > 500000",
+            "severity": "HIGH"
+        },
+        {
+            "rule_id": "FIN-001",
+            "description": "Suspicious financial transactions (potential laundering)",
+            "quote": "Transactions flagged as suspicious must be reviewed.",
+            "sql_query": "SELECT * FROM financial_transactions WHERE is_laundering = 1",
+            "severity": "HIGH"
+        },
+        {
+            "rule_id": "EXP-001",
+            "description": "High-value expenses require approval",
+            "quote": "All expenses over $1000 must be approved before reimbursement.",
+            "sql_query": "SELECT * FROM expenses WHERE amount > 1000 AND status != 'APPROVED'",
+            "severity": "HIGH"
+        },
+        {
+            "rule_id": "EXP-002",
+            "description": "Weekend expenses are not reimbursable",
+            "quote": "Expenses incurred on Saturday or Sunday are not eligible for reimbursement.",
+            "sql_query": "SELECT * FROM expenses WHERE strftime('%w', date) IN ('0', '6')",
+            "severity": "MEDIUM"
+        },
+        {
+            "rule_id": "EXP-003",
+            "description": "Entertainment expenses over $500 need pre-approval",
+            "quote": "Entertainment spending above $500 requires manager sign-off.",
+            "sql_query": "SELECT * FROM expenses WHERE category = 'Entertainment' AND amount > 500 AND status != 'APPROVED'",
+            "severity": "MEDIUM"
+        },
+    ]
+
+    save_policy(
+        policy_id="DEMO-POLICY-001",
+        name="Built-in Compliance Ruleset (Demo)",
+        rules=demo_rules
+    )
+    print("Seeded demo compliance policies.")

@@ -38,7 +38,7 @@ const FilterableTable = ({ title, data, columns }: { title: string, data: any[],
   });
 
   return (
-    <Card className="overflow-hidden border-border bg-card/40 backdrop-blur-sm">
+    <Card className="overflow-hidden border-white/10 bg-white/5 backdrop-blur-lg shadow-2xl">
       <CardHeader className="pb-4">
         <div className="flex items-center justify-between">
           <CardTitle className="text-lg font-medium capitalize flex items-center gap-2">
@@ -168,9 +168,14 @@ const DataViewer: React.FC = () => {
         columns={generateColumns(dbData.employees)}
       />
       <FilterableTable
-        title="Contracts"
-        data={dbData.contracts}
-        columns={generateColumns(dbData.contracts)}
+        title="Financial Transactions"
+        data={dbData.financial_transactions || []}
+        columns={generateColumns(dbData.financial_transactions || [])}
+      />
+      <FilterableTable
+        title="GDPR Violations"
+        data={dbData.gdpr_violations || []}
+        columns={generateColumns(dbData.gdpr_violations || [])}
       />
     </div>
   );

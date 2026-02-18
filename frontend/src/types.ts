@@ -29,6 +29,7 @@ export interface ViolationDetail {
   quote: string;
   violation_reason?: string; // Added for Dashboard feed
   violating_records: ViolatingRecord[];
+  total_matches?: number; // Total count from optimized query
 }
 
 export interface ComplianceReport {
@@ -40,5 +41,13 @@ export interface ComplianceReport {
 export interface DatabaseTables {
   expenses: Record<string, any>[];
   employees: Record<string, any>[];
-  contracts: Record<string, any>[];
+  financial_transactions: Record<string, any>[];
+  gdpr_violations: Record<string, any>[];
+}
+
+export interface SystemStats {
+  risk_score: 'Low' | 'Medium' | 'High';
+  total_violations: number;
+  active_policies: number;
+  real_time_events: number;
 }
