@@ -18,13 +18,19 @@ const AppShell = ({ children }: { children: React.ReactNode }) => (
 
 const App: React.FC = () => {
   const [view, setView] = useState<'dashboard' | 'uploader' | 'data'>('dashboard');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeProvider defaultTheme="dark" storageKey="vite-ui-theme">
         <AppShell>
           <div className="flex h-screen">
-            <Sidebar currentView={view} onViewChange={setView} />
+            <Sidebar
+              currentView={view}
+              onViewChange={setView}
+              collapsed={sidebarCollapsed}
+              onToggle={() => setSidebarCollapsed(c => !c)}
+            />
 
             <main className="flex-1 flex flex-col min-h-0 relative">
               <div className="fixed inset-0 pointer-events-none bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-primary/10 via-transparent to-transparent opacity-50 z-0"></div>
@@ -49,5 +55,6 @@ const App: React.FC = () => {
 };
 
 export default App;
+
 
 

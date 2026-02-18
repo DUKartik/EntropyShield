@@ -146,27 +146,46 @@ def init_mock_db():
         else:
             print(f"Warning: {gdpr_violations_path} not found.")
 
-        # 6. Financial Transactions (Sampled)
+        # 6. Financial Transactions — Stratified Sampling
+        # Problem: first N rows may have 0 laundering flags (they're rare and scattered).
+        # Solution: read a larger chunk, then take a stratified sample:
+        #   - ALL rows where is_laundering = 1 (guaranteed AML cases)
+        #   - Random 9000 clean rows to balance the dataset
         trans_path = os.path.join(base_dataset_path, "LI-Medium_Trans.csv")
         if os.path.exists(trans_path):
-            print("Loading Financial Transactions (Sampled)...")
-            # Load only 10,000 rows for demo performance
-            df_trans = pd.read_csv(trans_path, nrows=10000)
-            
-            # Rename duplicate columns if necessary
-            # The inspection showed: ['Timestamp', 'From Bank', 'Account', 'To Bank', 'Account', ...]
-            # Pandas handles duplicate names by adding .1, .2 etc. 
-            # We should rename them for clarity.
-            df_trans.columns = [
-                'timestamp', 'from_bank', 'from_account', 'to_bank', 'to_account', 
-                'amount_received', 'receiving_currency', 'amount_paid', 'payment_currency', 
+            print("Loading Financial Transactions (Stratified Sample)...")
+            df_trans_raw = pd.read_csv(trans_path, nrows=100000)
+            df_trans_raw.columns = [
+                'timestamp', 'from_bank', 'from_account', 'to_bank', 'to_account',
+                'amount_received', 'receiving_currency', 'amount_paid', 'payment_currency',
                 'payment_format', 'is_laundering'
             ]
-            
+            df_laundering = df_trans_raw[df_trans_raw['is_laundering'] == 1]
+            df_clean = df_trans_raw[df_trans_raw['is_laundering'] == 0].sample(
+                n=min(9000, len(df_trans_raw[df_trans_raw['is_laundering'] == 0])),
+                random_state=42
+            )
+            df_trans = pd.concat([df_laundering, df_clean]).sample(frac=1, random_state=42).reset_index(drop=True)
             df_trans.to_sql('financial_transactions', conn, if_exists='replace', index=False)
-            print(f"Loaded {len(df_trans)} financial transactions.")
+            print(f"Loaded {len(df_trans)} transactions ({len(df_laundering)} laundering + {len(df_clean)} clean).")
         else:
             print(f"Warning: {trans_path} not found.")
+
+
+        # 7. Bank Accounts (Entity mapping — joins with financial_transactions)
+        accounts_path = os.path.join(base_dataset_path, "LI-Medium_accounts.csv")
+        if os.path.exists(accounts_path):
+            print("Loading Bank Accounts (Entity mapping)...")
+            # Sample 50k rows — enough to cover accounts referenced in the 10k transactions
+            df_accounts = pd.read_csv(accounts_path, nrows=50000)
+            df_accounts.columns = [
+                'bank_name', 'bank_id', 'account_number', 'entity_id', 'entity_name'
+            ]
+            df_accounts.to_sql('bank_accounts', conn, if_exists='replace', index=False)
+            print(f"Loaded {len(df_accounts)} bank accounts.")
+        else:
+            print(f"Warning: {accounts_path} not found.")
+
 
     except ImportError:
         print("Error: pandas not installed. Skipping dataset loading.")

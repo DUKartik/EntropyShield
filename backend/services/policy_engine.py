@@ -118,31 +118,91 @@ def seed_demo_policies():
         return  # Already have policies, don't overwrite
 
     demo_rules = [
+        # --- AML / Financial Crime Rules ---
+        # AML-001: Direct laundering flag — always HIGH, exact match from IBM dataset labels
+        {
+            "rule_id": "AML-001",
+            "description": "Transactions explicitly flagged as money laundering",
+            "quote": "Any transaction tagged as laundering must be immediately escalated for review.",
+            "sql_query": (
+                "SELECT ft.timestamp, ft.from_account, ba_from.entity_name AS sender_entity, "
+                "ft.to_account, ba_to.entity_name AS receiver_entity, "
+                "ft.amount_paid, ft.payment_currency, ft.payment_format "
+                "FROM financial_transactions ft "
+                "LEFT JOIN bank_accounts ba_from ON ft.from_account = ba_from.account_number "
+                "LEFT JOIN bank_accounts ba_to ON ft.to_account = ba_to.account_number "
+                "WHERE ft.is_laundering = 1"
+            ),
+            "severity": "HIGH"
+        },
+        # AML-002: Threshold raised to $10M — catches ~1.26% of rows (126/10k), realistic for SAR filing
+        {
+            "rule_id": "AML-002",
+            "description": "Extremely large transactions over $10M (Suspicious Activity Report threshold)",
+            "quote": "Transactions exceeding $10,000,000 must be reported via Suspicious Activity Report (SAR).",
+            "sql_query": (
+                "SELECT ft.timestamp, ft.from_account, ba_from.entity_name AS sender_entity, "
+                "ft.to_account, ba_to.entity_name AS receiver_entity, "
+                "ft.amount_paid, ft.payment_currency "
+                "FROM financial_transactions ft "
+                "LEFT JOIN bank_accounts ba_from ON ft.from_account = ba_from.account_number "
+                "LEFT JOIN bank_accounts ba_to ON ft.to_account = ba_to.account_number "
+                "WHERE ft.amount_paid > 10000000"
+            ),
+            "severity": "HIGH"
+        },
+        # AML-003: Reinvestment + laundering — specific pattern for layering detection
+        {
+            "rule_id": "AML-003",
+            "description": "Reinvestment transactions flagged as laundering (layering pattern)",
+            "quote": "Reinvestment transactions used to layer illicit funds must be escalated.",
+            "sql_query": (
+                "SELECT ft.timestamp, ft.from_account, ba.entity_name AS entity, "
+                "ft.amount_paid, ft.payment_format "
+                "FROM financial_transactions ft "
+                "LEFT JOIN bank_accounts ba ON ft.from_account = ba.account_number "
+                "WHERE ft.payment_format = 'Reinvestment' AND ft.is_laundering = 1"
+            ),
+            "severity": "HIGH"
+        },
+        # AML-004: Bitcoin transactions — always suspicious in AML context
+        {
+            "rule_id": "AML-004",
+            "description": "Bitcoin transactions (high-risk payment format for AML)",
+            "quote": "Cryptocurrency transactions require enhanced due diligence under FATF guidelines.",
+            "sql_query": (
+                "SELECT ft.timestamp, ft.from_account, ba_from.entity_name AS sender_entity, "
+                "ft.to_account, ba_to.entity_name AS receiver_entity, "
+                "ft.amount_paid, ft.payment_currency "
+                "FROM financial_transactions ft "
+                "LEFT JOIN bank_accounts ba_from ON ft.from_account = ba_from.account_number "
+                "LEFT JOIN bank_accounts ba_to ON ft.to_account = ba_to.account_number "
+                "WHERE ft.payment_format = 'Bitcoin'"
+            ),
+            "severity": "MEDIUM"
+        },
+        # --- GDPR Rules ---
+        # GDPR-001: Top-tier fines only (€10M+) — truly exceptional violations
         {
             "rule_id": "GDPR-001",
-            "description": "High-value GDPR violations (fines over €1M)",
-            "quote": "Data controllers must pay fines proportionate to the violation.",
-            "sql_query": "SELECT * FROM gdpr_violations WHERE \"Price (EUR)\" > 1000000",
+            "description": "Exceptional GDPR fines over €10M (systemic data protection failures)",
+            "quote": "Fines up to €20M or 4% of global annual turnover for the most serious infringements.",
+            "sql_query": "SELECT * FROM gdpr_violations WHERE CAST(REPLACE(\"Price (EUR)\", ',', '') AS REAL) > 10000000",
             "severity": "HIGH"
         },
+        # GDPR-002: Mid-tier fines (€1M-€10M) — significant but not exceptional
         {
             "rule_id": "GDPR-002",
-            "description": "Violations by large companies (fine > €500K)",
-            "quote": "Large enterprises face higher penalties under GDPR.",
-            "sql_query": "SELECT * FROM gdpr_violations WHERE \"Price (EUR)\" > 500000",
-            "severity": "HIGH"
+            "description": "Significant GDPR fines between €1M and €10M",
+            "quote": "Fines up to €10M or 2% of global annual turnover for less serious infringements.",
+            "sql_query": "SELECT * FROM gdpr_violations WHERE CAST(REPLACE(\"Price (EUR)\", ',', '') AS REAL) BETWEEN 1000000 AND 10000000",
+            "severity": "MEDIUM"
         },
-        {
-            "rule_id": "FIN-001",
-            "description": "Suspicious financial transactions (potential laundering)",
-            "quote": "Transactions flagged as suspicious must be reviewed.",
-            "sql_query": "SELECT * FROM financial_transactions WHERE is_laundering = 1",
-            "severity": "HIGH"
-        },
+        # --- Expense Rules ---
         {
             "rule_id": "EXP-001",
-            "description": "High-value expenses require approval",
-            "quote": "All expenses over $1000 must be approved before reimbursement.",
+            "description": "High-value expenses require approval (over $1,000)",
+            "quote": "All expenses over $1,000 must be approved before reimbursement.",
             "sql_query": "SELECT * FROM expenses WHERE amount > 1000 AND status != 'APPROVED'",
             "severity": "HIGH"
         },
@@ -164,7 +224,9 @@ def seed_demo_policies():
 
     save_policy(
         policy_id="DEMO-POLICY-001",
-        name="Built-in Compliance Ruleset (Demo)",
+        name="Built-in Compliance Ruleset (AML + GDPR + Expenses)",
         rules=demo_rules
     )
-    print("Seeded demo compliance policies.")
+    print("Seeded demo compliance policies (with calibrated thresholds).")
+
+

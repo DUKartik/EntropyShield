@@ -1,5 +1,6 @@
 
-import React, { useMemo, useCallback } from 'react';
+import React, { useMemo, useCallback, useState } from 'react';
+import ViolationDrillDown from './ViolationDrillDown';
 import { useQuery } from '@tanstack/react-query';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { ShieldAlert, CheckCircle, TrendingUp, AlertTriangle, ArrowUpRight, History } from 'lucide-react';
@@ -69,8 +70,11 @@ const KpiCard = ({ title, value, icon, trend, color }: {
   </Card>
 );
 
-const ViolationItem: React.FC<{ violation: ViolationDetail }> = ({ violation }) => (
-  <div className="p-3 rounded-lg bg-card/60 border border-border/50 hover:bg-card/80 transition-colors">
+const ViolationItem: React.FC<{ violation: ViolationDetail; onClick: () => void }> = ({ violation, onClick }) => (
+  <div
+    className="p-3 rounded-lg bg-card/60 border border-border/50 hover:bg-card/80 transition-colors cursor-pointer hover:border-white/20 group"
+    onClick={onClick}
+  >
     <div className="flex items-start justify-between gap-2">
       <div className="flex items-start gap-3 min-w-0">
         <div className={cn("p-1.5 rounded-full flex-shrink-0 mt-0.5",
@@ -87,12 +91,15 @@ const ViolationItem: React.FC<{ violation: ViolationDetail }> = ({ violation }) 
           )}
         </div>
       </div>
-      <Badge
-        variant={violation.severity === 'HIGH' ? 'destructive' : 'secondary'}
-        className="flex-shrink-0 text-[10px]"
-      >
-        {violation.severity}
-      </Badge>
+      <div className="flex flex-col items-end gap-1 flex-shrink-0">
+        <Badge
+          variant={violation.severity === 'HIGH' ? 'destructive' : 'secondary'}
+          className="text-[10px]"
+        >
+          {violation.severity}
+        </Badge>
+        <span className="text-[10px] text-muted-foreground/50 group-hover:text-muted-foreground transition-colors">View →</span>
+      </div>
     </div>
   </div>
 );
@@ -102,6 +109,7 @@ const ViolationItem: React.FC<{ violation: ViolationDetail }> = ({ violation }) 
 const ComplianceDashboard: React.FC = () => {
   // Scan history state — stored in localStorage, updated after each scan
   const [history, setHistory] = React.useState<ScanSnapshot[]>(loadHistory);
+  const [selectedViolation, setSelectedViolation] = useState<ViolationDetail | null>(null);
 
   const { data: report, isLoading, isFetching, refetch } = useQuery({
     queryKey: ['compliance-report'],
@@ -260,12 +268,18 @@ const ComplianceDashboard: React.FC = () => {
               </div>
             ) : (
               report.details.slice(0, 20).map((v, i) => (
-                <ViolationItem key={i} violation={v} />
+                <ViolationItem key={i} violation={v} onClick={() => setSelectedViolation(v)} />
               ))
             )}
           </CardContent>
         </Card>
       </div>
+
+      {/* Drill-down modal */}
+      <ViolationDrillDown
+        violation={selectedViolation}
+        onClose={() => setSelectedViolation(null)}
+      />
     </div>
   );
 };
