@@ -1,85 +1,132 @@
 # EntropyShield: Intelligent Policy Compliance & Enforcement
 
-> **A Solution for Bridging Unstructured Policy Documents with Structured Operational Data.**
+> **Bridging unstructured policy documents with structured operational data — automatically, at scale.**
 
-## 🎯 The Challenge: The Compliance Gap
+---
 
-In modern enterprises, compliance requirements and business policies are often locked in **unstructured documents** (PDFs, contracts), while the operational data they govern lives in dynamic **structured databases**.
+## 🎯 The Problem: The Compliance Gap
 
-This disconnect forces organizations to rely on manual audits to enforce rules like:
-*   *"No dinner expenses over $50."*
-*   *"Vendor contracts must be renewed every 365 days."*
-*   *"Employees in Tier 2 cities cannot book Business Class."*
+In modern enterprises, compliance requirements live in **unstructured documents** (PDFs, contracts, policy memos), while the operational data they govern lives in **structured databases**.
 
-Manual verification is slow, error-prone, and cannot scale with data velocity.
+This disconnect forces organisations to rely on slow, error-prone manual audits to enforce rules like:
+
+- *"No dinner expenses over ₹2,000."*
+- *"Vendor contracts must be renewed every 365 days."*
+- *"Employees in Tier-2 cities cannot book Business Class."*
+
+Manual verification cannot scale with modern data velocity.
 
 ---
 
 ## 💡 The Solution: EntropyShield
 
-**EntropyShield** is a software-only platform that automates the entire lifecycle of policy enforcement.
+EntropyShield automates the **full lifecycle of policy enforcement** in four steps:
 
-It **Ingests** free-text policy documents, **Connects** to company databases, **Flags** violations in real-time, and **Monitors** data continuously—ensuring that your business rules are always enforced.
+### 1. Ingest & Interpret — Policy Engine
+- Upload any unstructured PDF policy document via a drag-and-drop interface.
+- **Gemini 1.5 Pro (Vertex AI)** extracts actionable rules from free text.
+- Rules are normalised into executable logic (e.g., `IF expense_type == 'Dinner' AND amount > 2000 THEN Flag`).
 
-### 1. Ingest & Interpret (The Policy Engine)
-*   **Action:** Drag & drop any unstructured PDF policy (e.g., "Global Travel Policy 2024").
-*   **Intelligence:** The system uses NLP to parse the text and extract actionable logic.
-*   **Result:** Static text is converted into executable rules (e.g., `IF Expense_Type == 'Dinner' AND Amount > 50 THEN Flag`).
+### 2. Connect & Scan — Compliance Monitor
+- Connects to the local `company_data.db` (SQLite via SQLAlchemy).
+- A background monitor cross-references every record against extracted policy rules.
+- Delivers **100% transaction coverage, 24/7**.
 
-### 2. Connect & Scan (The Compliance Monitor)
-*   **Action:** Connects directly to your operational database (SQL/NoSQL).
-*   **Intelligence:** A background monitor runs periodic scans, cross-referencing every new database record against the extracted policy rules.
-*   **Result:** 100% coverage of all transactions, 24/7.
+### 3. Flag & Explain — Live Dashboard
+- Violations surface instantly on the **Compliance Dashboard**.
+- Each flag includes a plain-language justification derived from the original policy text.
+- Bento Grid layout with real-time violation feed and interactive charts.
 
-### 3. Flag & Explain (Mission Control)
-*   **Action:** Violations are pushed instantly to a **Live Compliance Dashboard**.
-*   **Intelligence:** Every flag includes a clear, explainable justification derived from the original policy text, reducing "false positive" fatigue.
-*   **Result:** Auditors focus on high-risk exceptions, not data entry.
-
----
-
-## 🛡️ Document Integrity (Powered by VeriDoc)
-
-To ensure the policies being enforced are legitimate, EntropyShield incorporates a **Forensic Integrity Module** powered by the **VeriDoc Engine**.
-
-Before any policy is ingested, it undergoes a deep forensic scan to ensure it hasn't been tampered with by unauthorized actors.
-
-*   **Structural DNA Analysis:** Scans for incremental updates and hidden payloads to detect if clauses were surreptitiously changed.
-*   **Visual Physics (TruFor):** Uses advanced deep learning to generate heatmaps that reveal pixel-level splicing or editing in scanned policy documents.
-*   **Cryptographic Verification:** Validates the digital chain of trust for signed contracts.
+### 4. Verify Integrity — VeriDoc Forensic Engine
+- Every uploaded policy PDF is scanned **before** ingestion.
+- **Structural DNA Analysis:** detects hidden payloads and incremental update tampering.
+- **Visual Physics (TruFor + SegFormer):** deep-learning heatmaps reveal pixel-level image splicing in scanned documents.
+- **Cryptographic Chain-of-Trust:** validates digital signatures via PyHanko.
 
 ---
 
-## 💻 Technical Architecture
+## 🏗️ Architecture
 
-| Layer | Component | Function |
-| :--- | :--- | :--- |
-| **Ingestion** | **Policy Uploader** | Cinematic dropzone for unstructured PDF ingestion and Rule Extraction. |
-| **Logic** | **Policy Engine** | Python-based NLP service that converts text to logic. |
-| **Monitoring** | **Compliance Monitor** | Background service connecting to `company_data.db` for continuous scanning. |
-| **Interface** | **Compliance Dashboard** | React 19 Frontend with Bento Grid layout for real-time violation tracking. |
-| **Forensics** | **VeriDoc Engine** | Dual-modality engine (Structural + Visual) ensuring input integrity. |
+```
+┌────────────────────────────────────────────────────────────────┐
+│                         Frontend (React 19 + Vite)             │
+│  PolicyUploader → DataViewer → ComplianceDashboard             │
+└───────────────────────────┬────────────────────────────────────┘
+                            │ REST / JSON
+┌───────────────────────────▼────────────────────────────────────┐
+│                  Backend (FastAPI + Uvicorn)                    │
+│                                                                │
+│  /api/forensics  →  Pipeline Orchestrator                      │
+│    ├─ Pipeline A: Structural Analysis (pypdf, pyhanko)         │
+│    ├─ Pipeline B: Visual Analysis    (SegFormer, ELA, SIFT)    │
+│    └─ Pipeline C: Crypto Verification (cryptography, pyhanko)  │
+│                                                                │
+│  /api/compliance →  Policy Engine (Vertex AI / Gemini)         │
+│    └─ Compliance Monitor (SQLAlchemy → company_data.db)        │
+│                                                                │
+│  /api/admin      →  Dataset Loader / DB Admin                  │
+└────────────────────────────────────────────────────────────────┘
+```
+
+### Technology Stack
+
+| Layer | Technology | Version |
+|:---|:---|:---|
+| **API Framework** | FastAPI + Uvicorn | 0.129.0 / 0.41.0 |
+| **AI / LLM** | Google Vertex AI (Gemini) | `google-cloud-aiplatform` 1.138.0 |
+| **Forensic Visual** | PyTorch + Transformers + timm | 2.10.0 / 5.2.0 / 1.0.24 |
+| **PDF Processing** | pypdf + pyhanko + pdfminer.six | 6.7.1 / 0.33.0 |
+| **Computer Vision** | OpenCV Headless + Pillow | 4.13.0 / 12.1.1 |
+| **Database** | SQLAlchemy + SQLite | 2.0.46 |
+| **Frontend** | React 19 + Vite + TypeScript | — |
+| **Styling** | Tailwind CSS v4 | — |
+| **Python** | CPython | **3.12.10** |
+| **Node.js** | Node.js | 20+ |
 
 ---
 
-## 🚀 deployment
+## 🚀 Local Setup
 
 ### Prerequisites
-*   Python 3.12+
-*   Node.js 20+
-*   Google Cloud Project (Vertex AI API enabled)
+
+- **Python 3.12.10** (via [python.org](https://www.python.org/downloads/) or `py -3.12`)
+- **Node.js 20+**
+- **Google Cloud Project** with Vertex AI API enabled
+- A valid `backend/gcp-key.json` service-account key file
+
+---
 
 ### Backend
 
-```bash
+```powershell
+# 1. Clone the repository
 git clone https://github.com/Start-Impulse/VeriDoc-EntropyShield.git
-cd backend
-python -m venv venv
-source venv/bin/activate
+cd VeriDoc-EntropyShield\backend
+
+# 2. Create and activate a Python 3.12 virtual environment
+py -3.12 -m venv venv
+.\venv\Scripts\Activate.ps1
+
+# 3. Install all dependencies
 pip install -r requirements.txt
-python scripts/setup_trufor.py  # Download VeriDoc Forensic Models
-uvicorn main:app --reload
+
+# 4. Configure environment variables
+copy .env.example .env
+# Edit .env with your GCP project ID, credentials path, etc.
+
+# 5. (Optional) Download VeriDoc forensic model weights
+python scripts/setup_trufor.py
+
+# 6. Start the API server
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
+
+> **Linux / macOS:** replace `.\venv\Scripts\Activate.ps1` with `source venv/bin/activate`.
+
+The API will be available at `http://localhost:8000`.  
+Interactive docs: `http://localhost:8000/docs`
+
+---
 
 ### Frontend
 
@@ -89,6 +136,61 @@ npm install
 npm run dev
 ```
 
+The UI will be available at `http://localhost:5173`.
+
 ---
 
-**EntropyShield** turns your static policy documents into dynamic, automated data guards.
+## 📁 Project Structure
+
+```
+EntropyShield/
+├── backend/
+│   ├── main.py                   # FastAPI app entry point
+│   ├── requirements.txt          # Pinned Python dependencies
+│   ├── .env.example              # Environment variable template
+│   ├── company_data.db           # SQLite operational database
+│   ├── routers/
+│   │   ├── forensics.py          # /api/forensics — document scanning
+│   │   ├── compliance.py         # /api/compliance — rule checking
+│   │   └── admin.py              # /api/admin — DB management
+│   ├── services/
+│   │   ├── policy_engine.py      # Gemini rule extraction
+│   │   ├── compliance_monitor.py # Background scanning service
+│   │   ├── database_connector.py # SQLAlchemy connection + seed
+│   │   ├── dataset_loader.py     # CSV → SQLite ingestion
+│   │   ├── image_analyzers.py    # ELA, SIFT, metadata analysis
+│   │   └── forensic_reasoning.py # AI forensic report generation
+│   ├── components/
+│   │   ├── pipeline_orchestrator.py
+│   │   ├── scoring_engine.py
+│   │   ├── segformer/            # SegFormer forgery detection
+│   │   └── trufor/               # TruFor deep-learning forensics
+│   └── utils/
+│       ├── debug_logger.py
+│       └── crypto_utils.py
+└── frontend/
+    ├── src/
+    │   ├── components/
+    │   │   ├── PolicyUploader.tsx
+    │   │   ├── DataViewer.tsx
+    │   │   └── ComplianceDashboard.tsx
+    │   └── services/
+    └── index.html
+```
+
+---
+
+## 🔑 Environment Variables
+
+Copy `backend/.env.example` to `backend/.env` and fill in:
+
+| Variable | Description |
+|:---|:---|
+| `GOOGLE_APPLICATION_CREDENTIALS` | Path to your `gcp-key.json` |
+| `GCP_PROJECT_ID` | Your Google Cloud project ID |
+| `GCP_LOCATION` | Vertex AI region (e.g. `asia-south1`) |
+| `TRUFOR_REMOTE_URL` | (Optional) Remote TruFor inference endpoint |
+
+---
+
+**EntropyShield** — turn static policy documents into dynamic, automated data guards.

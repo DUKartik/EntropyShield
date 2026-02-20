@@ -1,11 +1,12 @@
 import os
-import torch
-import numpy as np
-import torch.nn.functional as F
-from PIL import Image
 import sys
 import threading
 from pathlib import Path
+# ---------------------------------------------------------------------------
+# Heavy imports (torch, numpy, PIL) are intentionally deferred.
+# They load the first time TruForEngine is instantiated (i.e., on first
+# integrity-check upload), not at server startup.
+# ---------------------------------------------------------------------------
 
 # Add backend root to sys.path 
 backend_root = Path(__file__).resolve().parent.parent.parent
@@ -34,7 +35,7 @@ except ImportError as e:
 class TruForEngine:
     _instance = None
     _model = None
-    _device = "cuda" if torch.cuda.is_available() else "cpu"
+    _device = None   # set lazily in _load_model to avoid importing torch at class-define time
     _lock = threading.Lock()
 
     def __new__(cls):
@@ -45,6 +46,12 @@ class TruForEngine:
         return cls._instance
 
     def _load_model(self):
+        # Lazy imports: torch/numpy/PIL load here, the first time TruForEngine is created
+        import torch  # noqa: PLC0415
+        import numpy as np  # noqa: PLC0415
+
+        self._device = "cuda" if torch.cuda.is_available() else "cpu"
+
         if TruForFactory is None:
             logger.error("TruFor dependencies missing. Skipping model load.")
             return
@@ -108,6 +115,11 @@ class TruForEngine:
             - confidence_map: 0-1 float array (How much to trust the heatmap)
             - score: Global integrity score (0 = Fake, 1 = Real)
         """
+        # Lazy imports
+        import torch  # noqa: PLC0415
+        import numpy as np  # noqa: PLC0415
+        from PIL import Image  # noqa: PLC0415
+
         if self._model is None:
             return {
                 "heatmap": None,
@@ -204,12 +216,16 @@ class TruForEngine:
             return {"trust_score": 1.0, "error": str(e)}
 
     def _transform_image(self, img):
+        import torch  # noqa: PLC0415
+        import numpy as np  # noqa: PLC0415
         # Standard RGB normalization for TruFor
         arr = np.array(img).astype(np.float32) / 255.0
         arr = np.transpose(arr, (2, 0, 1)) # HWC -> CHW
         return torch.tensor(arr).unsqueeze(0) # Add batch dim
 
     def _resize_map(self, prob_map, target_size):
+        import numpy as np  # noqa: PLC0415
+        from PIL import Image  # noqa: PLC0415
         # Resize to original image dimensions for overlay
         # prob_map is already 0-1 float numpy array
         prob_img = Image.fromarray((prob_map * 255).astype(np.uint8))

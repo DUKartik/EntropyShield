@@ -1,28 +1,49 @@
-fastapi
-uvicorn
-python-multipart
-pypdf
-pdfminer.six
-opencv-python-headless
-scikit-image
-numpy
-pyhanko
-certifi
-cryptography
-pydantic
-google-cloud-aiplatform
-google-cloud-storage
-python-dotenv
+# ── Web Framework ─────────────────────────────────────────────────────────────
+fastapi==0.129.0
+uvicorn==0.41.0
+python-multipart==0.0.22
+pydantic==2.12.5
+starlette==0.52.1
 
-torch
+# ── PDF Processing ────────────────────────────────────────────────────────────
+pypdf==6.7.1
+pdfminer.six==20260107        # required by pyhanko internally
+pyhanko==0.33.0               # PDF digital-signature validation
+pyhanko-certvalidator==0.29.1
 
-transformers
-accelerate
-pillow
+# ── Image / Computer Vision ───────────────────────────────────────────────────
+opencv-python-headless==4.13.0.92   # cv2  (image_analyzers.py, pipeline_orchestrator.py)
+pillow==12.1.1                      # PIL  (trufor/engine.py)
+numpy==2.4.2
+matplotlib==3.10.8                  # trufor/core/lib/utils.py
 
-matplotlib
-timm
-yacs
-scipy
-setuptools
-sqlalchemy
+# ── Deep Learning ─────────────────────────────────────────────────────────────
+torch==2.10.0
+torchvision==0.25.0
+transformers==5.2.0
+accelerate==1.12.0
+timm==1.0.24                  # trufor/core/lib/models/cmx (DropPath, trunc_normal_ etc.)
+safetensors==0.7.0
+tokenizers==0.22.2
+yacs==0.1.8                   # trufor/core/lib/config/default.py
+
+# ── Data / Database ───────────────────────────────────────────────────────────
+pandas==3.0.1                 # dataset_loader.py (chunked CSV ingestion)
+sqlalchemy==2.0.46            # database_connector.py
+
+# ── Google Cloud ──────────────────────────────────────────────────────────────
+google-cloud-aiplatform==1.138.0   # vertexai (policy_engine.py, forensic_reasoning.py)
+google-cloud-storage==3.9.0        # gcs_service.py
+google-genai==1.64.0
+
+# ── Cryptography / TLS ────────────────────────────────────────────────────────
+cryptography==46.0.5          # pyhanko dependency + crypto_utils.py
+certifi==2026.1.4             # crypto_utils.py
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+python-dotenv==1.2.1          # .env loading across services
+setuptools==82.0.0            # required by some torch/timm internals at runtime
+psutil==7.2.2                 # system monitoring / debug
+huggingface_hub==1.4.1        # model weight downloads (TruFor / SegFormer)
+requests==2.32.5
+tqdm==4.67.3

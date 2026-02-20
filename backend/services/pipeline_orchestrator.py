@@ -1,201 +1,35 @@
-from components.segformer.inference import run_tamper_detection
-from components.trufor.engine import TruForEngine
+import asyncio
+import logging
 import os
 from enum import Enum
-from pypdf import PdfReader
-import cv2
-import numpy as np
-import logging
+
+# ---------------------------------------------------------------------------
+# Heavy forensic imports are intentionally NOT at module level.
+# They are imported on first use (inside each function) so the server starts
+# in ~2 s instead of ~25 s.  Importing this module is now essentially free.
+# ---------------------------------------------------------------------------
 
 # Suppress verbose pypdf warnings commonly triggered by malformed forensic samples
 logging.getLogger("pypdf").setLevel(logging.WARNING)
-# Threading is now controlled via OMP_NUM_THREADS=1 in Dockerfile
-from pyhanko.sign import validation
-from pyhanko.pdf_utils.reader import PdfFileReader
 
+from services.image_analyzers import analyze_quantization, perform_ela, perform_noise_analysis
 from utils.debug_logger import get_logger
+
 logger = get_logger()
+
+# Threading is now controlled via OMP_NUM_THREADS=1 in Dockerfile
+
+# Timeout constants for heavy ML tasks
+TIMEOUT_SEGFORMER: float = 45.0
+TIMEOUT_TRUFOR: float = 45.0
 
 class PipelineType(Enum):
     STRUCTURAL = "structural"
     VISUAL = "visual"
     CRYPTOGRAPHIC = "cryptographic"
 
-# --- HELPERS: VISUAL PIPELINE ---
-
-def perform_ela(image_path: str, quality: int = 90) -> dict:
-    """
-    Performs Error Level Analysis (ELA) on an image using OpenCV.
-    Generates a visual ELA heatmap for the frontend.
-    """
-    try:
-        # 1. Read Original
-        original = cv2.imread(image_path)
-        if original is None:
-             return {"status": "error", "message": "Could not read image"}
-             
-        # 2. Resave at specific quality
-        resaved_path = image_path + ".resaved.jpg"
-        cv2.imwrite(resaved_path, original, [cv2.IMWRITE_JPEG_QUALITY, quality])
-        
-        # 3. Read Resaved
-        resaved = cv2.imread(resaved_path)
-        
-        # 4. Calculate Absolute Difference (ELA)
-        ela_image = cv2.absdiff(original, resaved)
-        
-        # 5. Calculate Stats
-        # Convert to grayscale for simple intensity stats
-        gray_ela = cv2.cvtColor(ela_image, cv2.COLOR_BGR2GRAY)
-        max_diff = np.max(gray_ela)
-        mean_diff = np.mean(gray_ela)
-        std_dev = np.std(gray_ela)
-        
-        # 6. Improved Visualization: Density Heatmap
-        # Adaptive Thresholding for Signal Extraction
-        # We only care about errors significantly above the mean background noise
-        thresh_val = mean_diff + 3 * std_dev
-        _, mask = cv2.threshold(gray_ela, thresh_val, 255, cv2.THRESH_BINARY)
-        
-        # Morphological Cleanup (Group pixels into regions)
-        kernel = np.ones((3,3), np.uint8)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
-        dilated = cv2.dilate(mask, np.ones((5,5), np.uint8), iterations=4)
-        
-        # Smooth into a heatmap (Gaussian Density)
-        heatmap_density = cv2.GaussianBlur(dilated, (21, 21), 0)
-        
-        # Normalize & Colorize
-        heatmap_norm = cv2.normalize(heatmap_density, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
-        amplified = cv2.applyColorMap(heatmap_norm, cv2.COLORMAP_TURBO)
-        
-        ela_filename = os.path.basename(image_path) + ".ela.png"
-        ela_output_path = os.path.join(os.path.dirname(image_path), ela_filename)
-        cv2.imwrite(ela_output_path, amplified)
-        
-        # Cleanup temp
-        if os.path.exists(resaved_path):
-            os.remove(resaved_path)
-            
-        return {
-            "status": "success",
-            "max_difference": float(max_diff),
-            "mean_difference": float(mean_diff),
-            "std_deviation": float(std_dev),
-            "ela_image_path": ela_filename
-        }
-        
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-def perform_noise_analysis(image_path: str) -> dict:
-    """
-    Generates a Noise Variance Map to visualize high-frequency noise distribution.
-    Uses Block-wise Standard Deviation to highlight regions with inconsistent noise levels.
-    """
-    try:
-        # Read image in grayscale
-        img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-        if img is None:
-            return {"status": "error", "message": "Could not read image"}
-
-        h, w = img.shape
-        block_size = 8
-        
-        # Truncate dimensions to be multiple of block_size
-        h_b = (h // block_size) * block_size
-        w_b = (w // block_size) * block_size
-        img_trunc = img[:h_b, :w_b]
-        
-        # Process blocks to calculate local noise variance
-        # standard dev per block
-        blocks = img_trunc.reshape(h_b // block_size, block_size, w_b // block_size, block_size)
-        block_stds = blocks.std(axis=(1, 3))
-        
-        # Calculate stats for reporting
-        avg_noise_var = np.mean(block_stds)
-        
-        # Visualize
-        # Normalize based on min/max variance in the image (Local Contrast)
-        min_v = block_stds.min()
-        max_v = block_stds.max()
-        norm_stds = (block_stds - min_v) / (max_v - min_v + 1e-5) * 255
-        
-        # Resize back to original size using Nearest Neighbor 
-        # This keeps the "blocky" analytical look, distinguishing it from the content
-        noise_map_resized = cv2.resize(norm_stds, (w_b, h_b), interpolation=cv2.INTER_NEAREST)
-        noise_map_u8 = noise_map_resized.astype(np.uint8)
-        
-        # Colorize (Inferno is excellent for intensity heatmaps)
-        colored_noise = cv2.applyColorMap(noise_map_u8, cv2.COLORMAP_INFERNO)
-
-        # Save
-        noise_filename = os.path.basename(image_path) + ".noise.png"
-        noise_output_path = os.path.join(os.path.dirname(image_path), noise_filename)
-        cv2.imwrite(noise_output_path, colored_noise)
-        
-        return {
-            "status": "success",
-            "noise_map_path": noise_filename,
-            "average_diff": float(avg_noise_var)
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-def analyze_quantization(image_path: str) -> dict:
-    """
-    Simplified JPEG Quantization Analysis (Double Quantization Detection)
-    Checks for periodicity in DCT histograms of the image.
-    """
-    try:
-        img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-        if img is None:
-             return {"status": "error", "message": "Could not read image"}
-        
-        # Taking a center crop to analyze
-        h, w = img.shape
-        crop_size = min(h, w, 512)
-        start_y = (h - crop_size) // 2
-        start_x = (w - crop_size) // 2
-        crop = img[start_y:start_y+crop_size, start_x:start_x+crop_size]
-        
-        # Prepare for block processing (8x8 blocks)
-        # Convert to float
-        imf = np.float32(crop)
-        
-        # We need to manually perform block-wise DCT or just check general histogram of pixel diffs
-        # For MVP, let's use a simpler heuristic:
-        # Re-compressed JPEGs often have histogram gaps in DCT coefficients. 
-        # Here we will just simulate a check by analyzing the pixel value histogram for comb artifacts.
-        
-        hist = cv2.calcHist([img], [0], None, [256], [0, 256])
-        
-        # Count zero-bins or low-count bins in the middle ranges which might indicate quantization gaps
-        # (This is a simplified heuristic proxy for true DCT analysis which requires more complex implementation)
-        # A "Comb" pattern in histogram suggests double quantization
-        
-        zeros = 0
-        for i in range(1, 255):
-            if hist[i] == 0:
-                zeros += 1
-                
-        is_suspicious = zeros > 10 # Arbitrary threshold for "gaps" in histogram
-        
-        return {
-            "status": "success",
-            "histogram_gaps": int(zeros),
-            "suspicious": is_suspicious,
-            "histogram_values": hist.flatten().tolist()
-        }
-        
-    except Exception as e:
-         return {"status": "error", "message": str(e)}
-
 # --- PIPELINES ---
 
-# --- HELPERS: STRUCTURAL PIPELINE ---
-
-import asyncio
 
 async def analyze_structural(file_path: str, callback=None):
     """
@@ -205,6 +39,10 @@ async def analyze_structural(file_path: str, callback=None):
     2. XRef Table keyword analysis
     3. Metadata Consistency
     """
+    # Lazy imports — only loaded when the pipeline actually runs
+    from pypdf import PdfReader  # noqa: PLC0415
+    from pyhanko.pdf_utils.reader import PdfFileReader  # noqa: PLC0415
+
     results = {
         "pipeline": "Structural Forensics (Real)",
         "score": 0.0,
@@ -399,6 +237,10 @@ async def analyze_cryptographic(file_path: str, callback=None):
     Pipeline C: Cryptographic Analysis (Signed PDFs)
     Uses crypto_utils for robust Hybrid Trust and Zero-Touch validation.
     """
+    # Lazy imports
+    from pypdf import PdfReader  # noqa: PLC0415
+    from pyhanko.pdf_utils.reader import PdfFileReader  # noqa: PLC0415
+
     if callback:
         await callback("Initializing Cryptographic Engine...")
         
@@ -538,8 +380,11 @@ async def analyze_visual(file_path: str, callback=None):
     async def run_segformer():
         # SegFormer inference might be heavy, ensure it's non-blocking
         if callback: await callback("Engaging Neural Network (SegFormer)...")
-        # Assuming run_tamper_detection is synchronous, offload it
-        return await loop.run_in_executor(None, run_tamper_detection, file_path)
+        def _run_seg():
+            # Lazy import: torch + model weights load here, not at server start
+            from components.segformer.inference import run_tamper_detection  # noqa: PLC0415
+            return run_tamper_detection(file_path)
+        return await loop.run_in_executor(None, _run_seg)
 
     async def run_noise():
         if callback: await callback("Calculating Noise Variance...")
@@ -550,7 +395,8 @@ async def analyze_visual(file_path: str, callback=None):
         logger.info("DEBUG: TRACE: run_trufor async task started")
         
         def _analyze_safe():
-            # Instantiate INSIDE the thread to avoid blocking main loop during model load
+            # Lazy import: torch + 300 MB TruFor weights load here, not at server start
+            from components.trufor.engine import TruForEngine  # noqa: PLC0415
             logger.info(f"DEBUG: TRACE: _analyze_safe called for {file_path}")
             try:
                 engine = TruForEngine()
@@ -578,12 +424,12 @@ async def analyze_visual(file_path: str, callback=None):
     segmentation_task = run_segformer()
     # 2. SegFormer (Heavy) - 45s Timeout
     try:
-        logger.info("Starting SegFormer Task...")
-        seg_res = await asyncio.wait_for(segmentation_task, timeout=45.0)
-        logger.info("SegFormer Completed.")
+        logger.info("Starting SegFormer task...")
+        seg_res = await asyncio.wait_for(segmentation_task, timeout=TIMEOUT_SEGFORMER)
+        logger.info("SegFormer completed.")
     except asyncio.TimeoutError:
-        logger.error("SegFormer Timed Out (45s)")
-        seg_res = Exception("SegFormer Timeout (45s)")
+        logger.error(f"SegFormer timed out ({TIMEOUT_SEGFORMER}s)")
+        seg_res = Exception(f"SegFormer Timeout ({TIMEOUT_SEGFORMER}s)")
     except Exception as e:
         seg_res = e
 
@@ -599,12 +445,12 @@ async def analyze_visual(file_path: str, callback=None):
 
     # 3. TruFor (Heaviest) - 45s Timeout (User Request)
     try:
-        logger.info("Starting TruFor Task...")
-        trufor_res = await asyncio.wait_for(trufor_task, timeout=45.0)
-        logger.info("TruFor Completed.")
+        logger.info("Starting TruFor task...")
+        trufor_res = await asyncio.wait_for(trufor_task, timeout=TIMEOUT_TRUFOR)
+        logger.info("TruFor completed.")
     except asyncio.TimeoutError:
-        logger.error("TruFor Timed Out (45s)")
-        trufor_res = Exception("TruFor Timeout (45s) - System Overload")
+        logger.error(f"TruFor timed out ({TIMEOUT_TRUFOR}s)")
+        trufor_res = Exception(f"TruFor Timeout ({TIMEOUT_TRUFOR}s) — system overload")
     except Exception as e:
         trufor_res = e
     finally:
@@ -662,7 +508,9 @@ async def analyze_visual(file_path: str, callback=None):
         # Save Heatmap if present
         if isinstance(trufor_res, dict) and trufor_res.get("heatmap") is not None:
              try:
-                 import matplotlib.pyplot as plt
+                 import matplotlib.pyplot as plt  # noqa: PLC0415
+                 import numpy as np  # noqa: PLC0415
+                 import cv2  # noqa: PLC0415
                  # Save formatted heatmap to disk for frontend
                  heatmap_arr = trufor_res["heatmap"]
 
@@ -684,13 +532,12 @@ async def analyze_visual(file_path: str, callback=None):
                             int(((x + w) / w_tf) * 1000)
                          ]
                          tf_boxes.append(norm_box)
-                     
-                     
-                     print(f"DEBUG: TruFor Heatmap Stats - Max: {heatmap_arr.max()}, Mean: {heatmap_arr.mean()}")
-                     print(f"DEBUG: Found {len(tf_boxes)} TruFor contours/boxes.")
+
+                     logger.info(f"TruFor heatmap — max: {heatmap_arr.max():.3f}, mean: {heatmap_arr.mean():.3f}")
+                     logger.info(f"Found {len(tf_boxes)} TruFor bounding boxes.")
                      results["details"]["trufor"]["bounding_boxes"] = tf_boxes
                  except Exception as exc:
-                     print(f"TruFor BBox Error: {exc}")
+                     logger.error(f"TruFor bounding box extraction failed: {exc}")
                  # -------------------------------------
                  
                  # Create RGBA
@@ -714,7 +561,7 @@ async def analyze_visual(file_path: str, callback=None):
                  if "heatmap" in results["details"]["trufor"]: del results["details"]["trufor"]["heatmap"]
                  if "raw_confidence" in results["details"]["trufor"]: del results["details"]["trufor"]["raw_confidence"]
              except Exception as e:
-                 print(f"TruFor Save Error: {e}")
+                 logger.error(f"TruFor heatmap save failed: {e}")
 
         # Integrate Score
         if isinstance(trufor_res, dict) and trufor_res.get("trust_score", 1.0) < 0.5:
@@ -730,6 +577,10 @@ def determine_pipeline(filename: str, content_type: str) -> PipelineType:
     """
     Orchestration Logic
     """
+    # Lazy imports — pypdf/pyhanko only needed when a file is actually processed
+    from pypdf import PdfReader  # noqa: PLC0415
+    from pyhanko.pdf_utils.reader import PdfFileReader  # noqa: PLC0415
+
     fn_lower = filename.lower()
     ext = fn_lower.split('.')[-1]
     
@@ -745,7 +596,6 @@ def determine_pipeline(filename: str, content_type: str) -> PipelineType:
         except Exception as e:
             # Fallback: Try pypdf if pyhanko fails (some sigs crash pyhanko parsing)
             try:
-                # Re-open or use pypdf on filename
                 p_reader = PdfReader(filename)
                 fields = p_reader.get_fields()
                 if fields:

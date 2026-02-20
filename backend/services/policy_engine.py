@@ -1,26 +1,31 @@
-import os
-import google.generativeai as genai
-from google.cloud import aiplatform
-import vertexai
-from vertexai.generative_models import GenerativeModel, Part
 import json
+import os
 import re
+from typing import Any
 
-# Configure Vertex AI
-# Configure Vertex AI
-# Priority: GCP_PROJECT_ID -> GOOGLE_CLOUD_PROJECT -> Default
+# vertexai and GenerativeModel are NOT imported at module level because
+# google-cloud-aiplatform has a heavy import chain (~28 s on first load).
+# They are imported lazily inside the functions that actually use them.
+
+from utils.debug_logger import get_logger
+
+logger = get_logger()
+
+# GCP config read from env once (cheap — just os.getenv, no heavy import)
 project_id = os.getenv("GCP_PROJECT_ID", os.getenv("GOOGLE_CLOUD_PROJECT", "veridoc-frontend-808108840598"))
 location = os.getenv("GCP_LOCATION", "us-central1")
 
-try:
-    vertexai.init(project=project_id, location=location)
-except Exception as e:
-    print(f"Warning: Failed to init Vertex AI: {e}")
-
 def load_gemini_pro():
+    # Lazy import: vertexai only loads when Gemini is first invoked
+    import vertexai  # noqa: PLC0415
+    from vertexai.generative_models import GenerativeModel  # noqa: PLC0415
+    try:
+        vertexai.init(project=project_id, location=location)
+    except Exception as e:
+        logger.warning(f"Vertex AI init failed: {e}")
     return GenerativeModel("gemini-1.5-pro-001")
 
-def extract_rules_from_text(policy_text: str, policy_name: str):
+def extract_rules_from_text(policy_text: str, policy_name: str) -> list[dict]:
     """
     Uses Gemini 1.5 Pro to extract executable compliance rules from policy text.
     Returns a list of rule objects.
@@ -71,8 +76,8 @@ def extract_rules_from_text(policy_text: str, policy_name: str):
         return json.loads(text_resp)
         
     except Exception as e:
-        print(f"Vertex AI Error: {e}")
-        print("Falling back to MOCK rules for demonstration.")
+        logger.error(f"Vertex AI rule extraction failed: {e}")
+        logger.info("Falling back to mock rules for demonstration.")
         
         # FALLBACK MOCK RULES
         # so the user can test the UI even if they lack GCP permissions
@@ -97,7 +102,7 @@ def extract_rules_from_text(policy_text: str, policy_name: str):
 # In prod, this would be in the DB
 _active_policies = {} 
 
-def save_policy(policy_id, name, rules):
+def save_policy(policy_id: str, name: str, rules: list[dict]) -> dict[str, Any]:
     _active_policies[policy_id] = {
         "name": name,
         "rules": rules,
@@ -105,10 +110,10 @@ def save_policy(policy_id, name, rules):
     }
     return _active_policies[policy_id]
 
-def get_all_policies():
+def get_all_policies() -> dict[str, Any]:
     return _active_policies
 
-def seed_demo_policies():
+def seed_demo_policies() -> None:
     """
     Seeds built-in demo compliance policies so the system scan works
     out-of-the-box without requiring a manual policy upload.
@@ -227,6 +232,6 @@ def seed_demo_policies():
         name="Built-in Compliance Ruleset (AML + GDPR + Expenses)",
         rules=demo_rules
     )
-    print("Seeded demo compliance policies (with calibrated thresholds).")
+    logger.info("Seeded demo compliance policies (AML + GDPR + Expenses).")
 
 

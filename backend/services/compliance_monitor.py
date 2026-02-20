@@ -1,6 +1,10 @@
-from services.database_connector import execute_compliance_query
-from services.policy_engine import get_all_policies
 from datetime import datetime
+
+from services.database_connector import execute_compliance_query, execute_optimized_query
+from services.policy_engine import get_all_policies
+from utils.debug_logger import get_logger
+
+logger = get_logger()
 
 def run_compliance_check(policy_id: str = None):
     """
@@ -31,9 +35,6 @@ def run_compliance_check(policy_id: str = None):
         
         for rule in rules:
             try:
-                # Execute Optimized SQL rule
-                # This returns { count, rows } instead of full list
-                from services.database_connector import execute_optimized_query
                 query_result = execute_optimized_query(rule["sql_query"], limit=5)
                 
                 violations_count = query_result.get("count", 0)
@@ -53,7 +54,7 @@ def run_compliance_check(policy_id: str = None):
                         "total_matches": violations_count
                     })
             except Exception as e:
-                print(f"Error executing rule {rule.get('rule_id')}: {e}")
+                logger.error(f"Error executing rule {rule.get('rule_id')}: {e}")
     
     # --- GLOBAL OPTIMIZATION: CAP RESULTS ---
     # Sort results to show most critical first:

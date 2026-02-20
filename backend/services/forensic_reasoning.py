@@ -1,26 +1,18 @@
-import vertexai
+import asyncio
 from datetime import datetime
-
-from vertexai.generative_models import GenerativeModel, Part
 import json
 import os
 from dotenv import load_dotenv
 
+# vertexai is NOT imported at module level — google-cloud-aiplatform has a heavy
+# import chain (~29 s on first load). It is imported lazily inside
+# run_semantic_reasoning() which only runs when a document is uploaded.
+
 load_dotenv()
 
-# Initialize Vertex AI (Do this once in your app startup)
-# You should set these environment variables or replace the strings below
 PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT", os.getenv("PROJECT_ID", "your-project-id"))
 REGION = os.getenv("REGION", "asia-south1")
 from prompts.model_context import FORENSIC_DECISION_TREE
-
-# Check if we can initialize immediately, otherwise wait for main to do it or env vars
-try:
-    vertexai.init(project=PROJECT_ID, location=REGION)
-except Exception as e:
-    print(f"Warning: vertexai.init failed (likely due to placeholder PROJECT_ID): {e}")
-
-import asyncio
 
 def run_semantic_reasoning_sync_wrapper(gcs_uri, mime_type, local_report):
     """
@@ -32,23 +24,22 @@ async def run_semantic_reasoning(gcs_uri, mime_type="application/pdf", local_rep
     """
     Sends a file from GCS directly to Gemini 1.5 Pro for forensic analysis.
     Now ASYNC to prevent blocking the main event loop.
-    
-    Args:
-        gcs_uri: The path to the file (e.g., "gs://veridoc-bucket/uploads/file.pdf")
-        mime_type: "application/pdf" or "image/jpeg"
-        local_report: (Optional) Dictionary containing local analysis findings (ELA, SegFormer, etc.)
     """
-    
+    # Lazy imports: vertexai only loads the first time this function is called
+    import vertexai  # noqa: PLC0415
+    from vertexai.generative_models import GenerativeModel, Part  # noqa: PLC0415
     try:
-        # 1. Load the Model
-        # (Model initialized later with system instructions) 
+        vertexai.init(project=PROJECT_ID, location=REGION)
+    except Exception as e:
+        pass  # Already initialised or placeholder ID — handled below
 
-        # 2. Reference the file in the Bucket (Zero download latency!)
+    try:
+        # Reference the file in the Bucket (Zero download latency!)
         document_part = Part.from_uri(
             uri=gcs_uri,
             mime_type=mime_type
         )
-        
+
         # Prepare Context String from Local Report
         local_context = "No prior local analysis available."
         if local_report:

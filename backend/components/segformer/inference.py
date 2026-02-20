@@ -1,10 +1,8 @@
 import os
-import torch
-import torch.nn.functional as F
-import numpy as np
-import cv2
-from PIL import Image
-from .model import get_segformer_model
+# ---------------------------------------------------------------------------
+# Heavy imports (torch, cv2, PIL, numpy) are intentionally deferred.
+# They load the first time run_tamper_detection() is called, not at server start.
+# ---------------------------------------------------------------------------
 from utils.determinism import set_global_seed, get_tensor_fingerprint
 
 # Configuration
@@ -17,6 +15,9 @@ _model_instance = None
 def get_model():
     global _model_instance
     if _model_instance is None:
+        # Lazy imports: torch and the model class load here, on first inference call
+        import torch  # noqa: PLC0415
+        from .model import get_segformer_model  # noqa: PLC0415
         print('Loading SegFormer model...')
         model = get_segformer_model(num_classes=2, pretrained=False, device=DEVICE)
         model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
@@ -25,6 +26,9 @@ def get_model():
     return _model_instance
 
 def preprocess_image(image_path):
+    import torch  # noqa: PLC0415
+    import numpy as np  # noqa: PLC0415
+    from PIL import Image  # noqa: PLC0415
     image = Image.open(image_path).convert('RGB')
     original_size = image.size
     image = image.resize((IMAGE_SIZE, IMAGE_SIZE), Image.BILINEAR)
@@ -40,6 +44,15 @@ def preprocess_image(image_path):
 
 
 def run_tamper_detection(image_path):
+    # All heavy imports happen here — only on actual inference calls
+    import torch  # noqa: PLC0415
+    import torch.nn.functional as F  # noqa: PLC0415
+    import numpy as np  # noqa: PLC0415
+    import cv2  # noqa: PLC0415
+    import io  # noqa: PLC0415
+    import base64  # noqa: PLC0415
+    import matplotlib.pyplot as plt  # noqa: PLC0415
+    from PIL import Image  # noqa: PLC0415
     try:
         model = get_model()
         input_tensor, original_size = preprocess_image(image_path)
@@ -72,9 +85,7 @@ def run_tamper_detection(image_path):
         is_tampered = confidence_score > seg_threshold
 
         # 2. Generate Heatmap Visualization
-        import matplotlib.pyplot as plt
-        import io
-        import base64
+        # (matplotlib, io, base64 already imported at top of this function)
 
         # Create a custom colormap or use 'jet' but with ALPHA channel based on probability
         # We want high probability = visible, low probability = transparent
