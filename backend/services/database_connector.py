@@ -36,6 +36,17 @@ def init_mock_db() -> None:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         try:
+            # Always ensure the policies table exists (may be missing in older DBs)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS policies (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    rules TEXT NOT NULL,
+                    active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL
+                )
+            """)
+            conn.commit()
             cursor.execute("SELECT COUNT(*) FROM expenses")
             if cursor.fetchone()[0] > 0:
                 logger.info(f"Database {DB_PATH} already populated — skipping init.")
@@ -43,6 +54,8 @@ def init_mock_db() -> None:
                 return
         except sqlite3.OperationalError:
             pass   # Table doesn't exist yet — proceed with full init
+        finally:
+            conn.close()
 
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -85,6 +98,16 @@ def init_mock_db() -> None:
             end_date DATE,
             signed_by INTEGER,
             status TEXT
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS policies (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            rules TEXT NOT NULL,
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL
         )
     """)
 

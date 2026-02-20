@@ -1,12 +1,15 @@
 import json
 import os
 import re
+import sqlite3
+from datetime import datetime, timezone
 from typing import Any
 
 # vertexai and GenerativeModel are NOT imported at module level because
 # google-cloud-aiplatform has a heavy import chain (~28 s on first load).
 # They are imported lazily inside the functions that actually use them.
 
+from services.database_connector import DB_PATH
 from utils.debug_logger import get_logger
 
 logger = get_logger()
@@ -98,29 +101,75 @@ def extract_rules_from_text(policy_text: str, policy_name: str) -> list[dict]:
             }
         ]
         
-# Simple in-memory storage for demo purposes
-# In prod, this would be in the DB
-_active_policies = {} 
+# ---------------------------------------------------------------------------
+# Policy Storage — SQLite-backed (persists across restarts)
+# ---------------------------------------------------------------------------
+
+def _get_conn() -> sqlite3.Connection:
+    """Return a connection to the shared company_data.db."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
 
 def save_policy(policy_id: str, name: str, rules: list[dict]) -> dict[str, Any]:
-    _active_policies[policy_id] = {
-        "name": name,
-        "rules": rules,
-        "active": True
-    }
-    return _active_policies[policy_id]
+    """Upsert a policy into the DB and return its full record."""
+    conn = _get_conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO policies (id, name, rules, active, created_at)
+            VALUES (?, ?, ?, 1, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                name       = excluded.name,
+                rules      = excluded.rules,
+                active     = 1,
+                created_at = excluded.created_at
+            """,
+            (policy_id, name, json.dumps(rules), datetime.now(timezone.utc).isoformat()),
+        )
+        conn.commit()
+        logger.info(f"Policy '{name}' saved to DB (id={policy_id}, {len(rules)} rules).")
+    finally:
+        conn.close()
+
+    return {"name": name, "rules": rules, "active": True}
+
 
 def get_all_policies() -> dict[str, Any]:
-    return _active_policies
+    """Load all active policies from the DB."""
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT id, name, rules, active FROM policies WHERE active = 1"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    return {
+        row["id"]: {
+            "name": row["name"],
+            "rules": json.loads(row["rules"]),
+            "active": bool(row["active"]),
+        }
+        for row in rows
+    }
 
 def seed_demo_policies() -> None:
     """
     Seeds built-in demo compliance policies so the system scan works
     out-of-the-box without requiring a manual policy upload.
-    Only seeds if no policies are currently loaded.
+    Only seeds if no policies exist in the DB.
     """
-    if _active_policies:
-        return  # Already have policies, don't overwrite
+    conn = _get_conn()
+    try:
+        count = conn.execute("SELECT COUNT(*) FROM policies").fetchone()[0]
+    finally:
+        conn.close()
+
+    if count > 0:
+        logger.info("Demo policies already seeded — skipping.")
+        return
 
     demo_rules = [
         # --- AML / Financial Crime Rules ---
