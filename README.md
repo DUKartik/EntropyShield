@@ -30,11 +30,14 @@ EntropyShield automates the **full lifecycle of policy enforcement** in four ste
 ### 2. Connect & Scan — Compliance Monitor
 - Connects to the local `company_data.db` (SQLite via SQLAlchemy).
 - A background monitor cross-references every record against extracted policy rules.
+- **Persistent Rules**: Policies are stored in SQLite so they survive server restarts.
 - Delivers **100% transaction coverage, 24/7**.
 
-### 3. Flag & Explain — Live Dashboard
+### 3. Flag, Triage & Explain — Live Dashboard
 - Violations surface instantly on the **Compliance Dashboard**.
 - Each flag includes a plain-language justification derived from the original policy text.
+- **Human-in-the-Loop Triage**: Compliance officers can *Approve* or *Reject* violations directly from the dashboard.
+- **Audit Trails**: Triaged violations are logged to an `audit_logs` table (including reviewer notes) and excluded from the active KPI count.
 - Bento Grid layout with real-time violation feed and interactive charts.
 
 ### 4. Verify Integrity — VeriDoc Forensic Engine
@@ -62,11 +65,17 @@ EntropyShield automates the **full lifecycle of policy enforcement** in four ste
 │    └─ Pipeline C: Crypto Verification (cryptography, pyhanko)  │
 │                                                                │
 │  /api/compliance →  Policy Engine (Vertex AI / Gemini)         │
-│    └─ Compliance Monitor (SQLAlchemy → company_data.db)        │
+│    ├─ Compliance Monitor (SQLAlchemy → company_data.db)        │
+│    └─ Audit Logger (Approvals / False Positive tracking)       │
 │                                                                │
 │  /api/admin      →  Dataset Loader / DB Admin                  │
 └────────────────────────────────────────────────────────────────┘
 ```
+
+### Performance Optimisations
+- **Zero-Latency Forensic Uploads**: Integrates with GCS `gs://` URIs allowing Vertex AI to read document bytes directly without routing through the backend.
+- **Fast Startup via Lazy Loading**: Heavy data science libraries (`torch`, `cv2`, `PIL`, `vertexai`) are rigorously deferred until first use. Server startup takes **~5 seconds** instead of 30+.
+- **Query Chunking & Stratification**: Uses chunked SQLAlchemy queries (10k rows) and stratified DB sampling to maintain constant RAM usage regardless of dataset size (e.g., handles the 3GB AML dataset smoothly).
 
 ### Technology Stack
 

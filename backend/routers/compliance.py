@@ -8,6 +8,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
+from pydantic import BaseModel
 # pypdf is lazily imported inside upload_policy() to avoid adding it to startup time
 
 from services.compliance_monitor import run_compliance_check
@@ -166,4 +167,60 @@ def get_system_stats():
         }
     except Exception as e:
         logger.error(f"System stats error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+class AuditLogRequest(BaseModel):
+    id: str
+    rule_id: str
+    description: str
+    action: str
+    timestamp: str
+    record_preview: str
+
+@router.post("/audit/log")
+def log_audit_action(req: AuditLogRequest):
+    """
+    Log a human review action (APPROVED, REJECTED, or UNDO) for a violation.
+    If action is 'UNDO', we delete the record. Otherwise, we upsert it.
+    """
+    try:
+        conn = get_db_connection()
+        if req.action == "UNDO":
+            conn.execute("DELETE FROM audit_logs WHERE rule_id = ?", (req.rule_id,))
+            conn.commit()
+            conn.close()
+            return {"status": "success", "message": "Audit log undone"}
+        
+        # Upsert the new action for this rule (only one active triaged state per rule)
+        conn.execute(
+            """
+            INSERT INTO audit_logs (id, rule_id, description, action, timestamp, record_preview)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                description = excluded.description,
+                action = excluded.action,
+                timestamp = excluded.timestamp,
+                record_preview = excluded.record_preview
+            """,
+            (req.id, req.rule_id, req.description, req.action, req.timestamp, req.record_preview)
+        )
+        # Also clean up any old logs for this rule ID to strictly keep 1 active state
+        conn.execute("DELETE FROM audit_logs WHERE rule_id = ? AND id != ?", (req.rule_id, req.id))
+        conn.commit()
+        conn.close()
+        return {"status": "success", "log_id": req.id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/audit/logs")
+def get_audit_logs():
+    """Retrieve all audit logs."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM audit_logs ORDER BY timestamp DESC")
+        logs = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return logs
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -46,6 +46,17 @@ def init_mock_db() -> None:
                     created_at TEXT NOT NULL
                 )
             """)
+            # Always ensure the audit_logs table exists
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS audit_logs (
+                    id TEXT PRIMARY KEY,
+                    rule_id TEXT NOT NULL,
+                    description TEXT,
+                    action TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    record_preview TEXT
+                )
+            """)
             conn.commit()
             cursor.execute("SELECT COUNT(*) FROM expenses")
             if cursor.fetchone()[0] > 0:
@@ -108,6 +119,17 @@ def init_mock_db() -> None:
             rules TEXT NOT NULL,
             active INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS audit_logs (
+            id TEXT PRIMARY KEY,
+            rule_id TEXT NOT NULL,
+            description TEXT,
+            action TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            record_preview TEXT
         )
     """)
 

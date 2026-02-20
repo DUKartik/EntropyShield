@@ -3,7 +3,7 @@ import React, { useMemo, useCallback, useState } from 'react';
 import ViolationDrillDown from './ViolationDrillDown';
 import { useQuery } from '@tanstack/react-query';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-import { ShieldAlert, CheckCircle, TrendingUp, AlertTriangle, ArrowUpRight, History } from 'lucide-react';
+import { ShieldAlert, CheckCircle, XCircle, TrendingUp, AlertTriangle, ArrowUpRight, History } from 'lucide-react';
 import { api } from '../lib/api';
 import { ComplianceReport, ViolationDetail, SystemStats } from '../types';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
@@ -72,21 +72,38 @@ const KpiCard = ({ title, value, icon, trend, color }: {
 
 const ViolationItem: React.FC<{ violation: ViolationDetail; onClick: () => void }> = ({ violation, onClick }) => (
   <div
-    className="p-3 rounded-lg bg-card/60 border border-border/50 hover:bg-card/80 transition-colors cursor-pointer hover:border-white/20 group"
+    className={cn(
+      "p-3 rounded-lg border transition-colors cursor-pointer group",
+      violation.review_status
+        ? "bg-card/20 border-white/5 hover:bg-card/40 opacity-70"
+        : "bg-card/60 border-border/50 hover:bg-card/80 hover:border-white/20"
+    )}
     onClick={onClick}
   >
     <div className="flex items-start justify-between gap-2">
       <div className="flex items-start gap-3 min-w-0">
         <div className={cn("p-1.5 rounded-full flex-shrink-0 mt-0.5",
-          violation.severity === 'HIGH' ? 'bg-rose-500/10 text-rose-500' : 'bg-amber-500/10 text-amber-500')}>
-          <AlertTriangle className="w-3.5 h-3.5" />
+          violation.review_status === 'APPROVED' ? 'bg-emerald-500/10 text-emerald-500' :
+            violation.review_status === 'REJECTED' ? 'bg-rose-500/10 text-rose-500' :
+              violation.severity === 'HIGH' ? 'bg-rose-500/10 text-rose-500' : 'bg-amber-500/10 text-amber-500')}>
+          {violation.review_status === 'APPROVED' ? <CheckCircle className="w-3.5 h-3.5" /> :
+            violation.review_status === 'REJECTED' ? <XCircle className="w-3.5 h-3.5" /> :
+              <AlertTriangle className="w-3.5 h-3.5" />}
         </div>
         <div className="min-w-0">
-          <p className="font-medium text-sm text-foreground">{violation.rule_id}</p>
+          <p className="font-medium text-sm text-foreground flex items-center gap-2">
+            {violation.rule_id}
+            {violation.review_status && (
+              <span className="text-[9px] uppercase tracking-wider text-muted-foreground bg-white/10 px-1.5 py-0.5 rounded">
+                Triaged
+              </span>
+            )}
+          </p>
           <p className="text-xs text-muted-foreground mt-0.5 break-words">{violation.violation_reason}</p>
           {violation.total_matches != null && (
             <p className="text-[10px] text-muted-foreground/60 mt-1 font-mono">
               {violation.total_matches.toLocaleString()} records affected
+              {violation.review_status && " (excluded from total)"}
             </p>
           )}
         </div>
@@ -94,7 +111,7 @@ const ViolationItem: React.FC<{ violation: ViolationDetail; onClick: () => void 
       <div className="flex flex-col items-end gap-1 flex-shrink-0">
         <Badge
           variant={violation.severity === 'HIGH' ? 'destructive' : 'secondary'}
-          className="text-[10px]"
+          className={cn("text-[10px]", violation.review_status && "opacity-50")}
         >
           {violation.severity}
         </Badge>
@@ -279,6 +296,10 @@ const ComplianceDashboard: React.FC = () => {
       <ViolationDrillDown
         violation={selectedViolation}
         onClose={() => setSelectedViolation(null)}
+        onStatusChange={() => {
+          refetch(); // Refetch the compliance data to update the KPIs and feed
+          // also refetch system stats
+        }}
       />
     </div>
   );

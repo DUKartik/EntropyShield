@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from services.database_connector import execute_compliance_query, execute_optimized_query
+from services.database_connector import execute_compliance_query, execute_optimized_query, get_db_connection
 from services.policy_engine import get_all_policies
 from utils.debug_logger import get_logger
 
@@ -17,6 +17,20 @@ def run_compliance_check(policy_id: str = None):
         "total_violations": 0,
         "details": []
     }
+    
+    # ── 1. Fetch Audit Logs (Triaged Rules) ──
+    audit_logs = {}
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT rule_id, action FROM audit_logs")
+        for row in cursor.fetchall():
+            audit_logs[row["rule_id"]] = row["action"]
+        conn.close()
+    except Exception as e:
+        logger.error(f"Failed to fetch audit logs: {e}")
+        
+    # ── 2. Run Checks ──
     
     policies = get_all_policies()
     
@@ -41,17 +55,24 @@ def run_compliance_check(policy_id: str = None):
                 violations_rows = query_result.get("rows", [])
                 
                 if violations_count > 0:
-                    results["total_violations"] += violations_count
+                    rule_id = rule.get("rule_id", "Unknown")
+                    review_status = audit_logs.get(rule_id)
+                    
+                    # Only add to KPIs if NOT triaged
+                    if not review_status:
+                        results["total_violations"] += violations_count
+                        
                     results["details"].append({
                         "policy_id": pid,
                         "policy_name": policy_name,
-                        "rule_id": rule.get("rule_id", "Unknown"),
+                        "rule_id": rule_id,
                         "severity": rule.get("severity", "MEDIUM"),
                         "description": rule.get("description", "No description"),
                         "quote": rule.get("quote", ""),
                         "violation_reason": rule.get("description", "Policy specific violation"),
                         "violating_records": violations_rows, # Already limited by optimized query
-                        "total_matches": violations_count
+                        "total_matches": violations_count,
+                        "review_status": review_status # null if untested, else 'APPROVED'/'REJECTED'
                     })
             except Exception as e:
                 logger.error(f"Error executing rule {rule.get('rule_id')}: {e}")

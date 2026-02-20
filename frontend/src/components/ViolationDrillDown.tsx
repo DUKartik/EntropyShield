@@ -4,34 +4,16 @@ import { ViolationDetail, ViolatingRecord } from '../types';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { cn } from '../lib/utils';
-
-// --- Audit log stored in localStorage ---
-const AUDIT_KEY = 'entropyshield_audit_log';
+import { api } from '../lib/api';
 
 export interface AuditEntry {
     id: string;
     rule_id: string;
     description: string;
-    action: 'APPROVED' | 'REJECTED';
+    action: 'APPROVED' | 'REJECTED' | 'UNDO';
     reviewer: string;
     timestamp: string;
     record_preview: string;
-}
-
-export function loadAuditLog(): AuditEntry[] {
-    try { return JSON.parse(localStorage.getItem(AUDIT_KEY) || '[]'); }
-    catch { return []; }
-}
-
-function saveAuditEntry(entry: AuditEntry) {
-    const log = loadAuditLog();
-    localStorage.setItem(AUDIT_KEY, JSON.stringify([entry, ...log].slice(0, 100)));
-}
-
-function getReviewStatus(ruleId: string): 'APPROVED' | 'REJECTED' | null {
-    const log = loadAuditLog();
-    const entry = log.find(e => e.rule_id === ruleId);
-    return entry?.action ?? null;
 }
 
 // --- Format cell values nicely ---
@@ -88,17 +70,19 @@ const RecordTable: React.FC<{ records: ViolatingRecord[] }> = ({ records }) => {
 interface ViolationDrillDownProps {
     violation: ViolationDetail | null;
     onClose: () => void;
+    onStatusChange?: () => void;
 }
 
-const ViolationDrillDown: React.FC<ViolationDrillDownProps> = ({ violation, onClose }) => {
+const ViolationDrillDown: React.FC<ViolationDrillDownProps> = ({ violation, onClose, onStatusChange }) => {
     const [reviewStatus, setReviewStatus] = useState<'APPROVED' | 'REJECTED' | null>(null);
     const [justification, setJustification] = useState('');
     const [showJustification, setShowJustification] = useState(false);
     const [pendingAction, setPendingAction] = useState<'APPROVED' | 'REJECTED' | null>(null);
+    const [isSubmitting, setIsSubmitting] = useState(false);
 
     useEffect(() => {
         if (violation) {
-            setReviewStatus(getReviewStatus(violation.rule_id));
+            setReviewStatus(violation.review_status as any ?? null);
             setJustification('');
             setShowJustification(false);
             setPendingAction(null);
@@ -112,8 +96,9 @@ const ViolationDrillDown: React.FC<ViolationDrillDownProps> = ({ violation, onCl
         setShowJustification(true);
     };
 
-    const handleConfirm = () => {
+    const handleConfirm = async () => {
         if (!pendingAction) return;
+        setIsSubmitting(true);
         const entry: AuditEntry = {
             id: `${violation.rule_id}-${Date.now()}`,
             rule_id: violation.rule_id,
@@ -123,9 +108,39 @@ const ViolationDrillDown: React.FC<ViolationDrillDownProps> = ({ violation, onCl
             timestamp: new Date().toISOString(),
             record_preview: justification || `${violation.total_matches ?? '?'} records reviewed`,
         };
-        saveAuditEntry(entry);
-        setReviewStatus(pendingAction);
-        setShowJustification(false);
+        try {
+            await api.post('/audit/log', entry);
+            setReviewStatus(pendingAction);
+            setShowJustification(false);
+            if (onStatusChange) onStatusChange();
+        } catch (err) {
+            console.error(err);
+        } finally {
+            setIsSubmitting(false);
+        }
+    };
+
+    const handleUndo = async () => {
+        setIsSubmitting(true);
+        const entry: AuditEntry = {
+            id: `undo-${Date.now()}`,
+            rule_id: violation.rule_id,
+            description: violation.description,
+            action: 'UNDO',
+            reviewer: 'Compliance Officer',
+            timestamp: new Date().toISOString(),
+            record_preview: '',
+        };
+        try {
+            await api.post('/audit/log', entry);
+            setReviewStatus(null);
+            setShowJustification(false);
+            if (onStatusChange) onStatusChange();
+        } catch (err) {
+            console.error(err);
+        } finally {
+            setIsSubmitting(false);
+        }
     };
 
     const severityColor = violation.severity === 'HIGH'
@@ -232,8 +247,8 @@ const ViolationDrillDown: React.FC<ViolationDrillDownProps> = ({ violation, onCl
                                         </p>
                                         <p className="text-xs text-muted-foreground mt-0.5">Reviewed by Compliance Officer · Logged to audit trail</p>
                                     </div>
-                                    <Button variant="ghost" size="sm" className="ml-auto text-xs" onClick={() => setReviewStatus(null)}>
-                                        Undo
+                                    <Button variant="ghost" size="sm" className="ml-auto text-xs" onClick={handleUndo} disabled={isSubmitting}>
+                                        {isSubmitting ? '...' : 'Undo'}
                                     </Button>
                                 </div>
                             ) : showJustification ? (
@@ -245,14 +260,15 @@ const ViolationDrillDown: React.FC<ViolationDrillDownProps> = ({ violation, onCl
                                         value={justification}
                                         onChange={e => setJustification(e.target.value)}
                                         placeholder="Add reviewer notes..."
-                                        className="w-full h-20 px-3 py-2 text-sm bg-white/5 border border-white/10 rounded-lg text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-primary resize-none"
+                                        disabled={isSubmitting}
+                                        className="w-full h-20 px-3 py-2 text-sm bg-white/5 border border-white/10 rounded-lg text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-primary resize-none disabled:opacity-50"
                                     />
                                     <div className="flex gap-2">
-                                        <Button size="sm" onClick={handleConfirm}
+                                        <Button size="sm" onClick={handleConfirm} disabled={isSubmitting}
                                             className={pendingAction === 'APPROVED' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-rose-600 hover:bg-rose-700'}>
-                                            Confirm {pendingAction === 'APPROVED' ? 'Approval' : 'Rejection'}
+                                            {isSubmitting ? 'Saving...' : `Confirm ${pendingAction === 'APPROVED' ? 'Approval' : 'Rejection'}`}
                                         </Button>
-                                        <Button size="sm" variant="ghost" onClick={() => setShowJustification(false)}>Cancel</Button>
+                                        <Button size="sm" variant="ghost" onClick={() => setShowJustification(false)} disabled={isSubmitting}>Cancel</Button>
                                     </div>
                                 </div>
                             ) : (
