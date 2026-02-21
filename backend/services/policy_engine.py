@@ -273,7 +273,7 @@ def get_all_policies() -> dict[str, Any]:
     conn = _get_conn()
     try:
         rows = conn.execute(
-            "SELECT id, name, rules, active FROM policies WHERE active = 1"
+            "SELECT id, name, rules, active, created_at FROM policies WHERE active = 1"
         ).fetchall()
     finally:
         conn.close()
@@ -283,9 +283,30 @@ def get_all_policies() -> dict[str, Any]:
             "name": row["name"],
             "rules": json.loads(row["rules"]),
             "active": bool(row["active"]),
+            "created_at": row["created_at"],
         }
         for row in rows
     }
+
+
+def delete_policy(policy_id: str) -> bool:
+    """Soft-delete a policy by marking it inactive."""
+    conn = _get_conn()
+    try:
+        cursor = conn.execute(
+            "UPDATE policies SET active = 0 WHERE id = ? AND active = 1",
+            (policy_id,),
+        )
+        conn.commit()
+        deleted = cursor.rowcount > 0
+    finally:
+        conn.close()
+
+    if deleted:
+        logger.info(f"Policy '{policy_id}' soft-deleted.")
+    else:
+        logger.warning(f"Policy '{policy_id}' not found or already inactive.")
+    return deleted
 
 def seed_demo_policies() -> None:
     """

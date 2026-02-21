@@ -3,8 +3,7 @@ import React, { useState } from 'react';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient } from './lib/queryClient';
 import ComplianceDashboard from './components/ComplianceDashboard';
-import DataViewer from './components/DataViewer';
-import PolicyUploader from './components/PolicyUploader';
+import PolicyManager from './components/PolicyManager';
 import { ThemeProvider } from './components/ThemeProvider';
 import { Sidebar } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
@@ -17,7 +16,7 @@ const AppShell = ({ children }: { children: React.ReactNode }) => (
 );
 
 const App: React.FC = () => {
-  const [view, setView] = useState<'dashboard' | 'uploader' | 'data'>('dashboard');
+  const [view, setView] = useState<'dashboard' | 'data'>('dashboard');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   return (
@@ -42,8 +41,7 @@ const App: React.FC = () => {
               <div className="flex-1 overflow-y-auto">
                 <div className="p-6 md:p-8 max-w-[1600px] mx-auto space-y-8 w-full relative z-10">
                   {view === 'dashboard' && <ComplianceDashboard />}
-                  {view === 'uploader' && <PolicyUploader onUploadSuccess={() => { }} />}
-                  {view === 'data' && <DataViewer />}
+                  {view === 'data' && <PolicyManager />}
                 </div>
               </div>
             </main>

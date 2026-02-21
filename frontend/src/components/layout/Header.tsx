@@ -8,8 +8,7 @@ interface HeaderProps {
 
 const viewLabels: Record<string, string> = {
     dashboard: 'Overview',
-    uploader: 'Policy Engine',
-    data: 'Forensics',
+    data: 'Policy Manager',
 };
 
 export const Header: React.FC<HeaderProps> = ({ currentView }) => {

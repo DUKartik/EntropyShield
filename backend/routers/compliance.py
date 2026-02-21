@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from services.compliance_monitor import run_compliance_check
 from services.database_connector import get_db_connection
 from services.pipeline_orchestrator import analyze_structural
-from services.policy_engine import extract_rules_from_document, get_all_policies, save_policy, get_policy_by_name
+from services.policy_engine import extract_rules_from_document, get_all_policies, save_policy, get_policy_by_name, delete_policy
 from utils.debug_logger import get_logger
 
 logger = get_logger()
@@ -87,6 +87,43 @@ async def upload_policy(
     finally:
         if temp_path.exists():
             temp_path.unlink()
+
+
+@router.get("/policy/list")
+def list_policies():
+    """
+    Return all active policies as a JSON list.
+    """
+    try:
+        policies = get_all_policies()
+        return [
+            {
+                "policy_id": pid,
+                "name": pdata["name"],
+                "rules": pdata["rules"],
+                "rule_count": len(pdata["rules"]),
+                "created_at": pdata.get("created_at"),
+            }
+            for pid, pdata in policies.items()
+        ]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/policy/{policy_id}")
+def remove_policy(policy_id: str):
+    """
+    Soft-delete a policy by its ID.
+    """
+    try:
+        deleted = delete_policy(policy_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Policy not found or already deleted.")
+        return {"status": "success", "message": f"Policy {policy_id} deleted."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/compliance/run")

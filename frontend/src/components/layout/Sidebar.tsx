@@ -1,11 +1,11 @@
 
 import React from 'react';
-import { ShieldCheck, LayoutDashboard, Database, ChevronLeft, ChevronRight } from 'lucide-react';
+import { ShieldCheck, LayoutDashboard, FileText, ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface SidebarProps {
-  currentView: 'dashboard' | 'uploader' | 'data';
-  onViewChange: (view: 'dashboard' | 'uploader' | 'data') => void;
+  currentView: 'dashboard' | 'data';
+  onViewChange: (view: 'dashboard' | 'data') => void;
   collapsed: boolean;
   onToggle: () => void;
 }
@@ -73,15 +73,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onViewChange, col
           collapsed={collapsed}
         />
         <SidebarItem
-          icon={<ShieldCheck className="w-4 h-4 flex-shrink-0" />}
-          label="Policy Engine"
-          active={currentView === 'uploader'}
-          onClick={() => onViewChange('uploader')}
-          collapsed={collapsed}
-        />
-        <SidebarItem
-          icon={<Database className="w-4 h-4 flex-shrink-0" />}
-          label="Forensics"
+          icon={<FileText className="w-4 h-4 flex-shrink-0" />}
+          label="Policies"
           active={currentView === 'data'}
           onClick={() => onViewChange('data')}
           collapsed={collapsed}

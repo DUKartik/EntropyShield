@@ -37,5 +37,12 @@ export const api = {
             body,
         });
         return handleResponse<T>(response);
+    },
+
+    delete: async <T>(endpoint: string): Promise<T> => {
+        const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+            method: 'DELETE',
+        });
+        return handleResponse<T>(response);
     }
 };
