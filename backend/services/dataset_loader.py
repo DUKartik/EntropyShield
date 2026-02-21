@@ -154,6 +154,7 @@ DATASET_REGISTRY: list[DatasetConfig] = [
             max_clean_rows=9_000,
             random_state=42,
         ),
+        pre_process=lambda df: df.drop(columns=["is_laundering"], errors="ignore"),
     ),
 
     # ── Bank account entity map ───────────────────────────────────────────────

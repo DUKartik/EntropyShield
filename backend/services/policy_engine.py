@@ -167,17 +167,18 @@ def seed_demo_policies() -> None:
     finally:
         conn.close()
 
-    if count > 0:
-        logger.info("Demo policies already seeded — skipping.")
-        return
+    # Force updating demo policies for the rewrite
+    # if count > 0:
+    #     logger.info("Demo policies already seeded — skipping.")
+    #     return
 
     demo_rules = [
         # --- AML / Financial Crime Rules ---
-        # AML-001: Direct laundering flag — always HIGH, exact match from IBM dataset labels
+        # AML-001: Direct laundering flag removed. Replaced with heuristic: High-value cross-institution wire transfers
         {
             "rule_id": "AML-001",
-            "description": "Transactions explicitly flagged as money laundering",
-            "quote": "Any transaction tagged as laundering must be immediately escalated for review.",
+            "description": "High-value cross-institution Wire transfers (Potential structured placement)",
+            "quote": "Wire transfers exceeding $500,000 sent to external institutions must be reviewed.",
             "sql_query": (
                 "SELECT ft.timestamp, ft.from_account, ba_from.entity_name AS sender_entity, "
                 "ft.to_account, ba_to.entity_name AS receiver_entity, "
@@ -185,7 +186,7 @@ def seed_demo_policies() -> None:
                 "FROM financial_transactions ft "
                 "LEFT JOIN bank_accounts ba_from ON ft.from_account = ba_from.account_number "
                 "LEFT JOIN bank_accounts ba_to ON ft.to_account = ba_to.account_number "
-                "WHERE ft.is_laundering = 1"
+                "WHERE ft.payment_format = 'Wire' AND ft.amount_paid > 500000 AND ft.from_bank != ft.to_bank"
             ),
             "severity": "HIGH"
         },
@@ -205,17 +206,17 @@ def seed_demo_policies() -> None:
             ),
             "severity": "HIGH"
         },
-        # AML-003: Reinvestment + laundering — specific pattern for layering detection
+        # AML-003: High-value Reinvestment
         {
             "rule_id": "AML-003",
-            "description": "Reinvestment transactions flagged as laundering (layering pattern)",
-            "quote": "Reinvestment transactions used to layer illicit funds must be escalated.",
+            "description": "High-value Reinvestment transactions (Potential Layering)",
+            "quote": "Reinvestment transactions exceeding $1,000,000 used to layer illicit funds must be escalated.",
             "sql_query": (
                 "SELECT ft.timestamp, ft.from_account, ba.entity_name AS entity, "
                 "ft.amount_paid, ft.payment_format "
                 "FROM financial_transactions ft "
                 "LEFT JOIN bank_accounts ba ON ft.from_account = ba.account_number "
-                "WHERE ft.payment_format = 'Reinvestment' AND ft.is_laundering = 1"
+                "WHERE ft.payment_format = 'Reinvestment' AND ft.amount_paid > 1000000"
             ),
             "severity": "HIGH"
         },
