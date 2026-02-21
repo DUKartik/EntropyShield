@@ -19,7 +19,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from services.database_connector import init_mock_db
-from services.policy_engine import seed_demo_policies
 from utils.debug_logger import debug_router, get_logger
 
 # Routers
@@ -42,18 +41,11 @@ async def lifespan(app: FastAPI):
     logger.info("Startup: initialising EntropyShield backend...")
 
     try:
-        logger.info("Startup: initialising mock company database...")
+        logger.info("Startup: initialising company database...")
         init_mock_db()
-        logger.info("Startup: mock database ready.")
+        logger.info("Startup: company database ready.")
     except Exception as e:
         logger.error(f"Startup: database init failed — {e}")
-
-    try:
-        logger.info("Startup: seeding demo compliance policies...")
-        seed_demo_policies()
-        logger.info("Startup: demo policies ready.")
-    except Exception as e:
-        logger.error(f"Startup: policy seeding failed — {e}")
 
     # TruFor engine is lazy-loaded on first request to keep startup fast.
 
