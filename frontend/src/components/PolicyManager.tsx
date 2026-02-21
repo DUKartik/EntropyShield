@@ -13,6 +13,7 @@ import {
     Shield,
     ChevronDown,
     ChevronUp,
+    X,
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { Policy, Rule } from '../types';
@@ -43,7 +44,8 @@ const PolicyCard: React.FC<{
     policy: PolicyListItem;
     onDelete: (id: string) => void;
     isDeleting: boolean;
-}> = ({ policy, onDelete, isDeleting }) => {
+    onRuleClick: (rule: Rule) => void;
+}> = ({ policy, onDelete, isDeleting, onRuleClick }) => {
     const [expanded, setExpanded] = useState(false);
 
     return (
@@ -126,7 +128,8 @@ const PolicyCard: React.FC<{
                                     {policy.rules.map((rule, i) => (
                                         <div
                                             key={i}
-                                            className="p-3 bg-white/[0.03] rounded-lg border border-white/5"
+                                            onClick={() => onRuleClick(rule)}
+                                            className="p-3 bg-white/[0.03] rounded-lg border border-white/5 cursor-pointer hover:bg-white/10 transition-colors"
                                         >
                                             <div className="flex items-start justify-between gap-2 mb-1">
                                                 <span className="font-mono text-[10px] px-1.5 py-0.5 bg-secondary/50 rounded text-secondary-foreground">
@@ -168,6 +171,7 @@ const PolicyManager: React.FC = () => {
     const [uploadSuccess, setUploadSuccess] = useState<UploadResponse | null>(null);
     const [deletingId, setDeletingId] = useState<string | null>(null);
     const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+    const [selectedRule, setSelectedRule] = useState<Rule | null>(null);
 
     /* ── Fetch policies ── */
     const { data: policies, isLoading: policiesLoading } = useQuery({
@@ -422,6 +426,7 @@ const PolicyManager: React.FC = () => {
                                     policy={policy}
                                     onDelete={handleDelete}
                                     isDeleting={deletingId === policy.policy_id}
+                                    onRuleClick={setSelectedRule}
                                 />
                             ))}
                         </AnimatePresence>
@@ -452,6 +457,70 @@ const PolicyManager: React.FC = () => {
                     )}
                 </AnimatePresence>
             </div>
+
+            {/* ── RULE DETAILS MODAL ── */}
+            <AnimatePresence>
+                {selectedRule && (
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm"
+                        onClick={() => setSelectedRule(null)}
+                    >
+                        <motion.div
+                            initial={{ scale: 0.95, opacity: 0 }}
+                            animate={{ scale: 1, opacity: 1 }}
+                            exit={{ scale: 0.95, opacity: 0 }}
+                            onClick={(e) => e.stopPropagation()}
+                            className="bg-card w-full max-w-lg rounded-xl border border-border shadow-2xl overflow-hidden"
+                        >
+                            <div className="flex items-center justify-between p-4 border-b border-border">
+                                <div className="flex items-center gap-3">
+                                    <span className="font-mono text-xs px-2 py-1 bg-secondary/50 rounded text-secondary-foreground">
+                                        {selectedRule.rule_id}
+                                    </span>
+                                    <span className={cn(
+                                        "text-xs px-2 py-1 rounded font-medium",
+                                        selectedRule.severity === 'HIGH' ? 'bg-destructive/20 text-destructive' : 'bg-primary/20 text-primary'
+                                    )}>
+                                        {selectedRule.severity}
+                                    </span>
+                                </div>
+                                <Button variant="ghost" size="sm" onClick={() => setSelectedRule(null)} className="h-8 w-8 p-0">
+                                    <X className="h-4 w-4" />
+                                </Button>
+                            </div>
+                            <div className="p-4 space-y-4">
+                                <div>
+                                    <h4 className="text-sm font-semibold text-muted-foreground mb-1">Description</h4>
+                                    <p className="text-sm text-foreground/90 leading-relaxed">
+                                        {selectedRule.description}
+                                    </p>
+                                </div>
+                                {selectedRule.quote && (
+                                    <div>
+                                        <h4 className="text-sm font-semibold text-muted-foreground mb-1">Policy Quote</h4>
+                                        <p className="text-sm text-foreground/70 italic border-l-2 border-primary/50 pl-2">
+                                            "{selectedRule.quote}"
+                                        </p>
+                                    </div>
+                                )}
+                                {selectedRule.sql_query && (
+                                    <div>
+                                        <h4 className="text-sm font-semibold text-muted-foreground mb-1">SQL Query</h4>
+                                        <div className="p-3 bg-muted/50 rounded-lg overflow-x-auto">
+                                            <pre className="text-xs font-mono text-muted-foreground">
+                                                {selectedRule.sql_query}
+                                            </pre>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
         </div>
     );
 };

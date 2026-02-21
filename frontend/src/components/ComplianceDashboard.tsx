@@ -1,7 +1,7 @@
 
-import React, { useMemo, useCallback, useState } from 'react';
+import React, { useMemo, useCallback, useState, useEffect } from 'react';
 import ViolationDrillDown from './ViolationDrillDown';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { ShieldAlert, CheckCircle, XCircle, TrendingUp, AlertTriangle, ArrowUpRight, History } from 'lucide-react';
 import { api } from '../lib/api';
@@ -125,8 +125,16 @@ const ViolationItem: React.FC<{ violation: ViolationDetail; onClick: () => void 
 
 const ComplianceDashboard: React.FC = () => {
   // Scan history state — stored in localStorage, updated after each scan
+  const queryClient = useQueryClient();
   const [history, setHistory] = React.useState<ScanSnapshot[]>(loadHistory);
   const [selectedViolation, setSelectedViolation] = useState<ViolationDetail | null>(null);
+
+  useEffect(() => {
+    // Force a background refresh whenever the dashboard is mounted (e.g. switching tabs)
+    queryClient.invalidateQueries({ queryKey: ['compliance-report'] });
+    queryClient.invalidateQueries({ queryKey: ['policy-list'] });
+    queryClient.invalidateQueries({ queryKey: ['system-stats'] });
+  }, [queryClient]);
 
   const { data: report, isLoading, isFetching, refetch } = useQuery({
     queryKey: ['compliance-report'],
@@ -143,7 +151,10 @@ const ComplianceDashboard: React.FC = () => {
 
   const handleRunCheck = useCallback(() => {
     refetch();
-  }, [refetch]);
+    // Invalidate policies and system stats to refresh counts across the app
+    queryClient.invalidateQueries({ queryKey: ['policy-list'] });
+    queryClient.invalidateQueries({ queryKey: ['system-stats'] });
+  }, [refetch, queryClient]);
 
   const handleClearHistory = useCallback(() => {
     localStorage.removeItem(HISTORY_KEY);
@@ -298,7 +309,8 @@ const ComplianceDashboard: React.FC = () => {
         onClose={() => setSelectedViolation(null)}
         onStatusChange={() => {
           refetch(); // Refetch the compliance data to update the KPIs and feed
-          // also refetch system stats
+          queryClient.invalidateQueries({ queryKey: ['policy-list'] });
+          queryClient.invalidateQueries({ queryKey: ['system-stats'] });
         }}
       />
     </div>
