@@ -12,7 +12,7 @@ from pydantic import BaseModel
 # pypdf is lazily imported inside upload_policy() to avoid adding it to startup time
 
 from services.compliance_monitor import run_compliance_check
-from services.database_connector import get_db_connection
+from services.database_connector import get_db_connection, execute_full_query
 from services.pipeline_orchestrator import analyze_structural
 from services.policy_engine import extract_rules_from_document, get_all_policies, save_policy, get_policy_by_name, delete_policy, clear_all_policies
 from utils.debug_logger import get_logger
@@ -228,6 +228,7 @@ class AuditLogRequest(BaseModel):
     action: str
     timestamp: str
     record_preview: str
+    record_ids: list[str] | None = None
 
 @router.post("/audit/log")
 def log_audit_action(req: AuditLogRequest):
@@ -237,8 +238,33 @@ def log_audit_action(req: AuditLogRequest):
     """
     try:
         conn = get_db_connection()
+        # If specific records are provided, operate on those
+        if req.record_ids is not None and len(req.record_ids) > 0:
+            if req.action == "UNDO":
+                for rec_id in req.record_ids:
+                    conn.execute("DELETE FROM audit_logs WHERE rule_id = ? AND record_id = ?", (req.rule_id, rec_id))
+                conn.commit()
+                conn.close()
+                return {"status": "success", "message": "Audit log undone for specific records"}
+            
+            for rec_id in req.record_ids:
+                log_id = f"{req.id}-{rec_id}"
+                conn.execute(
+                    """
+                    INSERT INTO audit_logs (id, rule_id, description, action, timestamp, record_preview, record_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        action = excluded.action,
+                        timestamp = excluded.timestamp
+                    """,
+                    (log_id, req.rule_id, req.description, req.action, req.timestamp, req.record_preview, rec_id)
+                )
+            conn.commit()
+            conn.close()
+            return {"status": "success", "log_id": req.id}
+            
         if req.action == "UNDO":
-            conn.execute("DELETE FROM audit_logs WHERE rule_id = ?", (req.rule_id,))
+            conn.execute("DELETE FROM audit_logs WHERE rule_id = ? AND record_id IS NULL", (req.rule_id,))
             conn.commit()
             conn.close()
             return {"status": "success", "message": "Audit log undone"}
@@ -246,8 +272,8 @@ def log_audit_action(req: AuditLogRequest):
         # Upsert the new action for this rule (only one active triaged state per rule)
         conn.execute(
             """
-            INSERT INTO audit_logs (id, rule_id, description, action, timestamp, record_preview)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO audit_logs (id, rule_id, description, action, timestamp, record_preview, record_id)
+            VALUES (?, ?, ?, ?, ?, ?, NULL)
             ON CONFLICT(id) DO UPDATE SET
                 description = excluded.description,
                 action = excluded.action,
@@ -257,11 +283,47 @@ def log_audit_action(req: AuditLogRequest):
             (req.id, req.rule_id, req.description, req.action, req.timestamp, req.record_preview)
         )
         # Also clean up any old logs for this rule ID to strictly keep 1 active state
-        conn.execute("DELETE FROM audit_logs WHERE rule_id = ? AND id != ?", (req.rule_id, req.id))
+        conn.execute("DELETE FROM audit_logs WHERE rule_id = ? AND id != ? AND record_id IS NULL", (req.rule_id, req.id))
         conn.commit()
         conn.close()
         return {"status": "success", "log_id": req.id}
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/compliance/rule/{policy_id}/{rule_id}/records")
+def get_rule_violating_records(policy_id: str, rule_id: str):
+    """
+    Fetch all violating records for a specific rule across the entire dataset.
+    """
+    try:
+        policies = get_all_policies()
+        if policy_id not in policies:
+            raise HTTPException(status_code=404, detail="Policy not found")
+        
+        target_rule = None
+        for rule in policies[policy_id].get("rules", []):
+            if rule.get("rule_id") == rule_id:
+                target_rule = rule
+                break
+                
+        if not target_rule:
+            raise HTTPException(status_code=404, detail="Rule not found")
+            
+        sql_query = target_rule.get("sql_query")
+        if not sql_query:
+            return {"records": []}
+            
+        # Execute the full query without pagination/limit
+        rows = execute_full_query(sql_query)
+        if isinstance(rows, dict) and "error" in rows:
+            raise HTTPException(status_code=500, detail=rows["error"])
+            
+        # Return all records
+        return {"records": rows}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to fetch records: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/audit/logs")

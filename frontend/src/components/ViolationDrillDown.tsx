@@ -14,6 +14,7 @@ export interface AuditEntry {
     reviewer: string;
     timestamp: string;
     record_preview: string;
+    record_ids?: string[];
 }
 
 // --- Format cell values nicely ---
@@ -28,16 +29,40 @@ function formatValue(val: any): string {
 }
 
 // --- Record Table ---
-const RecordTable: React.FC<{ records: ViolatingRecord[] }> = ({ records }) => {
+const RecordTable: React.FC<{
+    records: ViolatingRecord[],
+    selectedIds: Set<string>,
+    onToggleSelection: (id: string) => void,
+    onToggleAll: (allIds: string[], forceState?: boolean) => void
+}> = ({ records, selectedIds, onToggleSelection, onToggleAll }) => {
+    const [isExpanded, setIsExpanded] = React.useState(false);
+
     if (!records || records.length === 0) {
-        return <p className="text-sm text-muted-foreground text-center py-4">No sample records available.</p>;
+        return <p className="text-sm text-muted-foreground text-center py-4">No records available.</p>;
     }
-    const columns = Object.keys(records[0]);
+
+    // Ensure we don't display massive amounts in frontend gracefully
+    const displayLimit = isExpanded ? 500 : 5;
+    const displayRecords = records.slice(0, displayLimit);
+    const columns = Object.keys(displayRecords[0]).filter(col => col !== 'id');
+
+    // We assume every record has an "id", but fallback to the first column if missing
+    const allIds = displayRecords.map(r => String(r.id || r[Object.keys(r)[0]]));
+    const isAllSelected = allIds.length > 0 && allIds.every(id => selectedIds.has(id));
+
     return (
-        <div className="overflow-x-auto rounded-lg border border-white/10">
+        <div className="overflow-x-auto rounded-lg border border-white/10 max-h-[400px]">
             <table className="w-full text-xs">
-                <thead>
+                <thead className="sticky top-0 z-10 bg-slate-800">
                     <tr className="bg-white/5 border-b border-white/10">
+                        <th className="px-3 py-2 text-left w-8">
+                            <input
+                                type="checkbox"
+                                className="rounded border-white/20 bg-white/5 cursor-pointer"
+                                checked={isAllSelected}
+                                onChange={(e) => onToggleAll(allIds, e.target.checked)}
+                            />
+                        </th>
                         {columns.map(col => (
                             <th key={col} className="px-3 py-2 text-left text-muted-foreground font-medium whitespace-nowrap">
                                 {col.replace(/_/g, ' ').toUpperCase()}
@@ -46,22 +71,56 @@ const RecordTable: React.FC<{ records: ViolatingRecord[] }> = ({ records }) => {
                     </tr>
                 </thead>
                 <tbody>
-                    {records.map((row, i) => (
-                        <tr key={i} className={cn("border-b border-white/5 hover:bg-white/5 transition-colors",
-                            i % 2 === 0 ? 'bg-transparent' : 'bg-white/[0.02]')}>
-                            {columns.map(col => (
-                                <td key={col} className={cn("px-3 py-2 whitespace-nowrap font-mono",
-                                    col === 'is_laundering' && row[col] === 1 ? 'text-rose-400 font-bold' :
-                                        col.includes('amount') || col.includes('paid') ? 'text-emerald-400' :
-                                            'text-foreground/80'
-                                )}>
-                                    {col === 'is_laundering' ? (row[col] === 1 ? '🚨 YES' : '✅ NO') : formatValue(row[col])}
+                    {displayRecords.map((row, i) => {
+                        const rowId = String(row.id || row[Object.keys(row)[0]]);
+                        const isSelected = selectedIds.has(rowId);
+                        return (
+                            <tr key={i} className={cn("border-b border-white/5 hover:bg-white/5 transition-colors cursor-pointer",
+                                isSelected ? 'bg-indigo-500/10 hover:bg-indigo-500/20' : (i % 2 === 0 ? 'bg-transparent' : 'bg-white/[0.02]')
+                            )} onClick={() => onToggleSelection(rowId)}>
+                                <td className="px-3 py-2" onClick={e => e.stopPropagation()}>
+                                    <input
+                                        type="checkbox"
+                                        className="rounded border-white/20 bg-white/5 cursor-pointer pointer-events-auto"
+                                        checked={isSelected}
+                                        onChange={() => onToggleSelection(rowId)}
+                                    />
                                 </td>
-                            ))}
-                        </tr>
-                    ))}
+                                {columns.map(col => (
+                                    <td key={col} className={cn("px-3 py-2 whitespace-nowrap font-mono",
+                                        col === 'is_laundering' && row[col] === 1 ? 'text-rose-400 font-bold' :
+                                            col.includes('amount') || col.includes('paid') ? 'text-emerald-400' :
+                                                'text-foreground/80'
+                                    )}>
+                                        {col === 'is_laundering' ? (row[col] === 1 ? '🚨 YES' : '✅ NO') : formatValue(row[col])}
+                                    </td>
+                                ))}
+                            </tr>
+                        );
+                    })}
                 </tbody>
             </table>
+            {!isExpanded && records.length > 5 && (
+                <div className="p-3 text-center border-t border-white/10 bg-white/[0.01]">
+                    <Button variant="ghost" size="sm" onClick={() => setIsExpanded(true)} className="text-xs w-full text-indigo-400 hover:text-indigo-300 hover:bg-indigo-400/10">
+                        Expand All Records ({records.length})
+                    </Button>
+                </div>
+            )}
+            {isExpanded && records.length > 5 && (
+                <div className="p-3 text-center border-t border-white/10 bg-white/[0.01] flex flex-col items-center gap-1">
+                    {records.length > 500 && (
+                        <p className="text-xs text-muted-foreground">Showing top 500 of {records.length} records.</p>
+                    )}
+                    <Button variant="ghost" size="sm" onClick={() => {
+                        setIsExpanded(false);
+                        // Optional: Scroll back to the top of the table if it was long
+                        document.querySelector('.max-h-\\[400px\\]')?.scrollTo({ top: 0, behavior: 'smooth' });
+                    }} className="text-xs text-muted-foreground hover:text-white hover:bg-white/10">
+                        Minimize Records
+                    </Button>
+                </div>
+            )}
         </div>
     );
 };
@@ -80,14 +139,56 @@ const ViolationDrillDown: React.FC<ViolationDrillDownProps> = ({ violation, onCl
     const [pendingAction, setPendingAction] = useState<'APPROVED' | 'REJECTED' | null>(null);
     const [isSubmitting, setIsSubmitting] = useState(false);
 
+    const [allRecords, setAllRecords] = useState<ViolatingRecord[]>([]);
+    const [selectedRecordIds, setSelectedRecordIds] = useState<Set<string>>(new Set());
+    const [isLoadingRecords, setIsLoadingRecords] = useState(false);
+
     useEffect(() => {
         if (violation) {
             setReviewStatus(violation.review_status as any ?? null);
             setJustification('');
             setShowJustification(false);
             setPendingAction(null);
+            setSelectedRecordIds(new Set());
+
+            // Fetch all records
+            setIsLoadingRecords(true);
+            api.get<{ records: ViolatingRecord[] }>(`/compliance/rule/${violation.policy_id}/${violation.rule_id}/records`)
+                .then(res => {
+                    setAllRecords(res.records || []);
+                })
+                .catch(err => {
+                    console.error("Failed to load full records:", err);
+                    setAllRecords(violation.violating_records || []); // Fallback to sample
+                })
+                .finally(() => {
+                    setIsLoadingRecords(false);
+                });
         }
     }, [violation]);
+
+    const handleToggleSelection = (id: string) => {
+        setSelectedRecordIds(prev => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            return next;
+        });
+    };
+
+    const handleToggleAll = (allIds: string[], forceState?: boolean) => {
+        setSelectedRecordIds(prev => {
+            const next = new Set(prev);
+            const isAllCurrentlySelected = allIds.length > 0 && allIds.every(id => next.has(id));
+            const shouldSelect = forceState !== undefined ? forceState : !isAllCurrentlySelected;
+
+            allIds.forEach(id => {
+                if (shouldSelect) next.add(id);
+                else next.delete(id);
+            });
+            return next;
+        });
+    };
 
     if (!violation) return null;
 
@@ -99,6 +200,8 @@ const ViolationDrillDown: React.FC<ViolationDrillDownProps> = ({ violation, onCl
     const handleConfirm = async () => {
         if (!pendingAction) return;
         setIsSubmitting(true);
+
+        const isPartialReview = selectedRecordIds.size > 0 && selectedRecordIds.size < allRecords.length;
         const entry: AuditEntry = {
             id: `${violation.rule_id}-${Date.now()}`,
             rule_id: violation.rule_id,
@@ -106,11 +209,17 @@ const ViolationDrillDown: React.FC<ViolationDrillDownProps> = ({ violation, onCl
             action: pendingAction,
             reviewer: 'Compliance Officer',
             timestamp: new Date().toISOString(),
-            record_preview: justification || `${violation.total_matches ?? '?'} records reviewed`,
+            record_preview: justification || `${isPartialReview ? selectedRecordIds.size : (violation.total_matches ?? '?')} records reviewed`,
+            record_ids: isPartialReview ? Array.from(selectedRecordIds) : undefined
         };
         try {
             await api.post('/audit/log', entry);
-            setReviewStatus(pendingAction);
+            // If partial, we don't necessarily mark the rule as fully triaged
+            if (!isPartialReview) {
+                setReviewStatus(pendingAction);
+            } else {
+                setSelectedRecordIds(new Set()); // Clear selection on success
+            }
             setShowJustification(false);
             if (onStatusChange) onStatusChange();
         } catch (err) {
@@ -219,11 +328,25 @@ const ViolationDrillDown: React.FC<ViolationDrillDownProps> = ({ violation, onCl
                         <div className="flex items-center justify-between mb-3">
                             <h3 className="text-sm font-semibold text-white flex items-center gap-2">
                                 <ChevronRight className="w-4 h-4 text-muted-foreground" />
-                                Sample Violating Records
-                                <span className="text-xs text-muted-foreground font-normal">(showing up to 5 of {(violation.total_matches ?? 0).toLocaleString()})</span>
+                                Violating Records
+                                {isLoadingRecords ? (
+                                    <span className="text-xs text-muted-foreground font-normal animate-pulse">(Loading all {violation.total_matches} records...)</span>
+                                ) : (
+                                    <span className="text-xs text-muted-foreground font-normal">(Select specific rows to approve/reject individually)</span>
+                                )}
                             </h3>
+                            {selectedRecordIds.size > 0 && (
+                                <Badge variant="secondary" className="bg-primary/20 text-primary border-primary/30">
+                                    {selectedRecordIds.size} selected
+                                </Badge>
+                            )}
                         </div>
-                        <RecordTable records={violation.violating_records ?? []} />
+                        <RecordTable
+                            records={allRecords.length > 0 ? allRecords : (violation.violating_records ?? [])}
+                            selectedIds={selectedRecordIds}
+                            onToggleSelection={handleToggleSelection}
+                            onToggleAll={handleToggleAll}
+                        />
                     </div>
 
                     {/* Human Review Section */}
@@ -280,12 +403,12 @@ const ViolationDrillDown: React.FC<ViolationDrillDownProps> = ({ violation, onCl
                                         <Button size="sm" onClick={() => handleActionClick('APPROVED')}
                                             className="bg-rose-600 hover:bg-rose-700 flex items-center gap-2">
                                             <AlertTriangle className="w-3.5 h-3.5" />
-                                            Confirm Violation
+                                            Confirm Violation {selectedRecordIds.size > 0 && selectedRecordIds.size < allRecords.length ? `(${selectedRecordIds.size})` : ''}
                                         </Button>
                                         <Button size="sm" variant="outline" onClick={() => handleActionClick('REJECTED')}
                                             className="border-white/20 hover:bg-white/10 flex items-center gap-2">
                                             <XCircle className="w-3.5 h-3.5" />
-                                            False Positive
+                                            False Positive {selectedRecordIds.size > 0 && selectedRecordIds.size < allRecords.length ? `(${selectedRecordIds.size})` : ''}
                                         </Button>
                                     </div>
                                 </div>

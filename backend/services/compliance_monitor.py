@@ -18,14 +18,22 @@ def run_compliance_check(policy_id: str = None):
         "details": []
     }
     
-    # ── 1. Fetch Audit Logs (Triaged Rules) ──
+    # ── 1. Fetch Audit Logs (Triaged Rules & Records) ──
     audit_logs = {}
+    record_audits = {}
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT rule_id, action FROM audit_logs")
+        cursor.execute("SELECT rule_id, action, record_id FROM audit_logs")
         for row in cursor.fetchall():
-            audit_logs[row["rule_id"]] = row["action"]
+            if row["record_id"]:
+                # Record-level specific log
+                if row["rule_id"] not in record_audits:
+                    record_audits[row["rule_id"]] = {}
+                record_audits[row["rule_id"]][row["record_id"]] = row["action"]
+            else:
+                # Rule-level log
+                audit_logs[row["rule_id"]] = row["action"]
         conn.close()
     except Exception as e:
         logger.error(f"Failed to fetch audit logs: {e}")
@@ -58,22 +66,44 @@ def run_compliance_check(policy_id: str = None):
                     rule_id = rule.get("rule_id", "Unknown")
                     review_status = audit_logs.get(rule_id)
                     
-                    # Only add to KPIs if NOT triaged
-                    if not review_status:
-                        results["total_violations"] += violations_count
+                    # Compute effectively how many records are overridden/approved locally
+                    local_record_audits = record_audits.get(rule_id, {})
+                    
+                    # Filter out approved records from the sample rows
+                    filtered_rows = []
+                    for row in violations_rows:
+                        rec_id = str(row.get("id", ""))
+                        if local_record_audits.get(rec_id) == "APPROVED":
+                            continue
+                        filtered_rows.append(row)
+                    
+                    # Adjust totals
+                    approved_records_count = sum(1 for status in local_record_audits.values() if status == "APPROVED")
+                    effective_count = violations_count - approved_records_count
+                    if effective_count < 0:
+                        effective_count = 0
                         
-                    results["details"].append({
-                        "policy_id": pid,
-                        "policy_name": policy_name,
-                        "rule_id": rule_id,
-                        "severity": rule.get("severity", "MEDIUM"),
-                        "description": rule.get("description", "No description"),
-                        "quote": rule.get("quote", ""),
-                        "violation_reason": rule.get("description", "Policy specific violation"),
-                        "violating_records": violations_rows, # Already limited by optimized query
-                        "total_matches": violations_count,
-                        "review_status": review_status # null if untested, else 'APPROVED'/'REJECTED'
-                    })
+                    # If all records were individually approved, we might effectively treat the rule as triaged if count hits 0
+                    if effective_count == 0 and violations_count > 0 and not review_status:
+                        review_status = "APPROVED"
+                    
+                    # Only add to KPIs if NOT triaged at the rule level
+                    if not review_status:
+                        results["total_violations"] += effective_count
+                        
+                    if effective_count > 0 or review_status:
+                        results["details"].append({
+                            "policy_id": pid,
+                            "policy_name": policy_name,
+                            "rule_id": rule_id,
+                            "severity": rule.get("severity", "MEDIUM"),
+                            "description": rule.get("description", "No description"),
+                            "quote": rule.get("quote", ""),
+                            "violation_reason": rule.get("description", "Policy specific violation"),
+                            "violating_records": filtered_rows,
+                            "total_matches": effective_count,
+                            "review_status": review_status # null if untested, else 'APPROVED'/'REJECTED'
+                        })
             except Exception as e:
                 logger.error(f"Error executing rule {rule.get('rule_id')}: {e}")
     

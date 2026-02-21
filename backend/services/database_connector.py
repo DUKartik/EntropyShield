@@ -54,9 +54,14 @@ def init_mock_db() -> None:
                     description TEXT,
                     action TEXT NOT NULL,
                     timestamp TEXT NOT NULL,
-                    record_preview TEXT
+                    record_preview TEXT,
+                    record_id TEXT
                 )
             """)
+            try:
+                cursor.execute("ALTER TABLE audit_logs ADD COLUMN record_id TEXT")
+            except sqlite3.OperationalError:
+                pass
             conn.commit()
             cursor.execute("SELECT COUNT(*) FROM expenses")
             if cursor.fetchone()[0] > 0:
@@ -129,7 +134,8 @@ def init_mock_db() -> None:
             description TEXT,
             action TEXT NOT NULL,
             timestamp TEXT NOT NULL,
-            record_preview TEXT
+            record_preview TEXT,
+            record_id TEXT
         )
     """)
 
@@ -185,6 +191,21 @@ def execute_compliance_query(query: str):
             return {"error": "Only SELECT queries are allowed."}
 
         # Reuse the module-level engine (connection pooling)
+        with engine.connect() as connection:
+            result = connection.execute(text(query))
+            return [dict(row._mapping) for row in result]
+    except Exception as e:
+        return {"error": str(e)}
+
+def execute_full_query(query: str):
+    """
+    Executes a query to fetch all matching rows. 
+    Returns: List of dictionaries representing the rows.
+    """
+    try:
+        if not query.strip().upper().startswith("SELECT"):
+            return {"error": "Only SELECT queries allowed"}
+        
         with engine.connect() as connection:
             result = connection.execute(text(query))
             return [dict(row._mapping) for row in result]
