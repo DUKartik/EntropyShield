@@ -16,17 +16,19 @@ logger = get_logger()
 
 # GCP config read from env once (cheap — just os.getenv, no heavy import)
 project_id = os.getenv("GCP_PROJECT_ID", os.getenv("GOOGLE_CLOUD_PROJECT", "veridoc-frontend-808108840598"))
-location = os.getenv("GCP_LOCATION", "us-central1")
+location = os.getenv("REGION", "asia-south1")
 
 def load_gemini_pro():
-    # Lazy import: vertexai only loads when Gemini is first invoked
-    import vertexai  # noqa: PLC0415
-    from vertexai.generative_models import GenerativeModel  # noqa: PLC0415
-    try:
-        vertexai.init(project=project_id, location=location)
-    except Exception as e:
-        logger.warning(f"Vertex AI init failed: {e}")
-    return GenerativeModel("gemini-1.5-pro-001")
+    import google.generativeai as genai
+    
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        logger.error("GEMINI_API_KEY is not set. Rule extraction will likely fail.")
+    else:
+        genai.configure(api_key=api_key)
+        
+    model_name = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-flash")
+    return genai.GenerativeModel(model_name)
 
 def extract_rules_from_text(policy_text: str, policy_name: str) -> list[dict]:
     """
@@ -79,7 +81,9 @@ def extract_rules_from_text(policy_text: str, policy_name: str) -> list[dict]:
         return json.loads(text_resp)
         
     except Exception as e:
-        logger.error(f"Vertex AI rule extraction failed: {e}")
+        import traceback
+        traceback.print_exc()
+        logger.error(f"GenAI rule extraction failed: {e}")
         logger.info("Falling back to mock rules for demonstration.")
         
         # FALLBACK MOCK RULES
@@ -135,6 +139,16 @@ def save_policy(policy_id: str, name: str, rules: list[dict]) -> dict[str, Any]:
 
     return {"name": name, "rules": rules, "active": True}
 
+def get_policy_by_name(name: str):
+    """Retrieve an existing policy ID by its name to prevent duplicates."""
+    conn = _get_conn()
+    try:
+        row = conn.execute("SELECT id FROM policies WHERE name = ?", (name,)).fetchone()
+        if row:
+            return row["id"]
+    finally:
+        conn.close()
+    return None
 
 def get_all_policies() -> dict[str, Any]:
     """Load all active policies from the DB."""

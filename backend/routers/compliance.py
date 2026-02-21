@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from services.compliance_monitor import run_compliance_check
 from services.database_connector import get_db_connection
 from services.pipeline_orchestrator import analyze_structural
-from services.policy_engine import extract_rules_from_text, get_all_policies, save_policy
+from services.policy_engine import extract_rules_from_text, get_all_policies, save_policy, get_policy_by_name
 from utils.debug_logger import get_logger
 
 logger = get_logger()
@@ -73,7 +73,15 @@ async def upload_policy(
 
         # ── AI rule extraction & persistence ─────────────────────────────────
         rules = extract_rules_from_text(text, file.filename)
-        policy_id = str(uuid.uuid4())
+        
+        # Prevent saving Null or empty policies
+        if not rules:
+            raise HTTPException(status_code=400, detail="No compliance rules could be extracted from this document. Policy is empty or invalid.")
+
+        # Prevent duplicate rows by reusing the same policy ID if the filename was uploaded before
+        existing_policy_id = get_policy_by_name(file.filename)
+        policy_id = existing_policy_id if existing_policy_id else str(uuid.uuid4())
+
         saved_policy = save_policy(policy_id, file.filename, rules)
 
         return {"status": "success", "policy_id": policy_id, "data": saved_policy}
