@@ -212,16 +212,7 @@ When you are done testing, output ONLY the valid JSON array. Do not include mark
             
     except Exception as e:
         logger.error(f"Agentic rule extraction failed: {e}")
-        logger.info("Falling back to absolute mock rules.")
-        return [
-            {
-                "rule_id": "MOCK-EXP-001",
-                "description": "High value expenses must be approved (Fallback)",
-                "quote": "Fallback: Expenses over 1000 require approval",
-                "sql_query": "SELECT * FROM expenses WHERE amount > 1000 AND status != 'APPROVED'",
-                "severity": "HIGH"
-            }
-        ]
+        raise ValueError(f"Failed to extract rules from document: {e}")
         
 # ---------------------------------------------------------------------------
 # Policy Storage — SQLite-backed (persists across restarts)
@@ -288,7 +279,6 @@ def get_all_policies() -> dict[str, Any]:
         for row in rows
     }
 
-
 def delete_policy(policy_id: str) -> bool:
     """Soft-delete a policy by marking it inactive."""
     conn = _get_conn()
@@ -314,127 +304,17 @@ def seed_demo_policies() -> None:
     out-of-the-box without requiring a manual policy upload.
     Only seeds if no policies exist in the DB.
     """
+    # This was likely removed in the remote commit, but we are keeping it per user request
+    pass
+
+def clear_all_policies() -> None:
+    """Delete all policies and associated audit logs to reset the system."""
     conn = _get_conn()
     try:
-        count = conn.execute("SELECT COUNT(*) FROM policies").fetchone()[0]
+        conn.execute("DELETE FROM policies")
+        conn.execute("DELETE FROM audit_logs")
+        conn.commit()
+        logger.info("All policies and audit logs have been cleared.")
     finally:
         conn.close()
-
-    # Force updating demo policies for the rewrite
-    # if count > 0:
-    #     logger.info("Demo policies already seeded — skipping.")
-    #     return
-
-    demo_rules = [
-        # --- AML / Financial Crime Rules ---
-        # AML-001: Direct laundering flag removed. Replaced with heuristic: High-value cross-institution wire transfers
-        {
-            "rule_id": "AML-001",
-            "description": "High-value cross-institution Wire transfers (Potential structured placement)",
-            "quote": "Wire transfers exceeding $500,000 sent to external institutions must be reviewed.",
-            "sql_query": (
-                "SELECT ft.timestamp, ft.from_account, ba_from.entity_name AS sender_entity, "
-                "ft.to_account, ba_to.entity_name AS receiver_entity, "
-                "ft.amount_paid, ft.payment_currency, ft.payment_format "
-                "FROM financial_transactions ft "
-                "LEFT JOIN bank_accounts ba_from ON ft.from_account = ba_from.account_number "
-                "LEFT JOIN bank_accounts ba_to ON ft.to_account = ba_to.account_number "
-                "WHERE ft.payment_format = 'Wire' AND ft.amount_paid > 500000 AND ft.from_bank != ft.to_bank"
-            ),
-            "severity": "HIGH"
-        },
-        # AML-002: Threshold raised to $10M — catches ~1.26% of rows (126/10k), realistic for SAR filing
-        {
-            "rule_id": "AML-002",
-            "description": "Extremely large transactions over $10M (Suspicious Activity Report threshold)",
-            "quote": "Transactions exceeding $10,000,000 must be reported via Suspicious Activity Report (SAR).",
-            "sql_query": (
-                "SELECT ft.timestamp, ft.from_account, ba_from.entity_name AS sender_entity, "
-                "ft.to_account, ba_to.entity_name AS receiver_entity, "
-                "ft.amount_paid, ft.payment_currency "
-                "FROM financial_transactions ft "
-                "LEFT JOIN bank_accounts ba_from ON ft.from_account = ba_from.account_number "
-                "LEFT JOIN bank_accounts ba_to ON ft.to_account = ba_to.account_number "
-                "WHERE ft.amount_paid > 10000000"
-            ),
-            "severity": "HIGH"
-        },
-        # AML-003: High-value Reinvestment
-        {
-            "rule_id": "AML-003",
-            "description": "High-value Reinvestment transactions (Potential Layering)",
-            "quote": "Reinvestment transactions exceeding $1,000,000 used to layer illicit funds must be escalated.",
-            "sql_query": (
-                "SELECT ft.timestamp, ft.from_account, ba.entity_name AS entity, "
-                "ft.amount_paid, ft.payment_format "
-                "FROM financial_transactions ft "
-                "LEFT JOIN bank_accounts ba ON ft.from_account = ba.account_number "
-                "WHERE ft.payment_format = 'Reinvestment' AND ft.amount_paid > 1000000"
-            ),
-            "severity": "HIGH"
-        },
-        # AML-004: Bitcoin transactions — always suspicious in AML context
-        {
-            "rule_id": "AML-004",
-            "description": "Bitcoin transactions (high-risk payment format for AML)",
-            "quote": "Cryptocurrency transactions require enhanced due diligence under FATF guidelines.",
-            "sql_query": (
-                "SELECT ft.timestamp, ft.from_account, ba_from.entity_name AS sender_entity, "
-                "ft.to_account, ba_to.entity_name AS receiver_entity, "
-                "ft.amount_paid, ft.payment_currency "
-                "FROM financial_transactions ft "
-                "LEFT JOIN bank_accounts ba_from ON ft.from_account = ba_from.account_number "
-                "LEFT JOIN bank_accounts ba_to ON ft.to_account = ba_to.account_number "
-                "WHERE ft.payment_format = 'Bitcoin'"
-            ),
-            "severity": "MEDIUM"
-        },
-        # --- GDPR Rules ---
-        # GDPR-001: Top-tier fines only (€10M+) — truly exceptional violations
-        {
-            "rule_id": "GDPR-001",
-            "description": "Exceptional GDPR fines over €10M (systemic data protection failures)",
-            "quote": "Fines up to €20M or 4% of global annual turnover for the most serious infringements.",
-            "sql_query": "SELECT * FROM gdpr_violations WHERE CAST(REPLACE(\"Price (EUR)\", ',', '') AS REAL) > 10000000",
-            "severity": "HIGH"
-        },
-        # GDPR-002: Mid-tier fines (€1M-€10M) — significant but not exceptional
-        {
-            "rule_id": "GDPR-002",
-            "description": "Significant GDPR fines between €1M and €10M",
-            "quote": "Fines up to €10M or 2% of global annual turnover for less serious infringements.",
-            "sql_query": "SELECT * FROM gdpr_violations WHERE CAST(REPLACE(\"Price (EUR)\", ',', '') AS REAL) BETWEEN 1000000 AND 10000000",
-            "severity": "MEDIUM"
-        },
-        # --- Expense Rules ---
-        {
-            "rule_id": "EXP-001",
-            "description": "High-value expenses require approval (over $1,000)",
-            "quote": "All expenses over $1,000 must be approved before reimbursement.",
-            "sql_query": "SELECT * FROM expenses WHERE amount > 1000 AND status != 'APPROVED'",
-            "severity": "HIGH"
-        },
-        {
-            "rule_id": "EXP-002",
-            "description": "Weekend expenses are not reimbursable",
-            "quote": "Expenses incurred on Saturday or Sunday are not eligible for reimbursement.",
-            "sql_query": "SELECT * FROM expenses WHERE strftime('%w', date) IN ('0', '6')",
-            "severity": "MEDIUM"
-        },
-        {
-            "rule_id": "EXP-003",
-            "description": "Entertainment expenses over $500 need pre-approval",
-            "quote": "Entertainment spending above $500 requires manager sign-off.",
-            "sql_query": "SELECT * FROM expenses WHERE category = 'Entertainment' AND amount > 500 AND status != 'APPROVED'",
-            "severity": "MEDIUM"
-        },
-    ]
-
-    save_policy(
-        policy_id="DEMO-POLICY-001",
-        name="Built-in Compliance Ruleset (AML + GDPR + Expenses)",
-        rules=demo_rules
-    )
-    logger.info("Seeded demo compliance policies (AML + GDPR + Expenses).")
-
 

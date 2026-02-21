@@ -119,20 +119,6 @@ class DatasetConfig:
 # ---------------------------------------------------------------------------
 
 DATASET_REGISTRY: list[DatasetConfig] = [
-    # ── GDPR articles ────────────────────────────────────────────────────────
-    DatasetConfig(
-        filename="gdpr_text.csv",
-        table_name="gdpr_articles",
-        chunk_size=5_000,
-    ),
-
-    # ── GDPR enforcement fines ───────────────────────────────────────────────
-    DatasetConfig(
-        filename="gdpr_violations.csv",
-        table_name="gdpr_violations",
-        chunk_size=5_000,
-    ),
-
     # ── Financial transactions (2.97 GB) — stratified AML sample ─────────────
     # We read 100 k rows from the file then produce a balanced sample.
     # chunked writing keeps SQLite writes bounded to 10 k rows at a time.

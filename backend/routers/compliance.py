@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from services.compliance_monitor import run_compliance_check
 from services.database_connector import get_db_connection
 from services.pipeline_orchestrator import analyze_structural
-from services.policy_engine import extract_rules_from_document, get_all_policies, save_policy, get_policy_by_name, delete_policy
+from services.policy_engine import extract_rules_from_document, get_all_policies, save_policy, get_policy_by_name, delete_policy, clear_all_policies
 from utils.debug_logger import get_logger
 
 logger = get_logger()
@@ -123,6 +123,20 @@ def remove_policy(policy_id: str):
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Failed to delete policy: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/policy/clear")
+def clear_policies():
+    """
+    Clear all uploaded policies and triaged audit logs, resetting the system.
+    """
+    try:
+        clear_all_policies()
+        return {"status": "success", "message": "All policies cleared"}
+    except Exception as e:
+        logger.error(f"Failed to clear policies: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -141,10 +155,10 @@ def trigger_compliance_check(policy_id: str = None):
 @router.get("/database/preview")
 def preview_database():
     """
-    Return the first 10 rows of each key table in the mock database.
+    Return the first 10 rows of each key table in the company database.
     Useful for the data-viewer component in the frontend.
     """
-    tables = ["expenses", "employees", "financial_transactions", "gdpr_violations"]
+    tables = ["financial_transactions", "bank_accounts"]
     try:
         conn = get_db_connection()
         cursor = conn.cursor()

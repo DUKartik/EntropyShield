@@ -1,14 +1,14 @@
 
 import React, { useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { UploadCloud, FileText, CheckCircle, AlertTriangle, ShieldAlert, ScanLine } from 'lucide-react';
+import { UploadCloud, FileText, CheckCircle, AlertTriangle, ShieldAlert, ScanLine, Trash2 } from 'lucide-react';
 import { api } from '../lib/api';
 import { Policy, Rule } from '../types';
 import { Switch } from './ui/switch';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
 import { cn } from '../lib/utils';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 interface uploadResponse {
   status: string;
@@ -20,6 +20,29 @@ const PolicyUploader: React.FC<{ onUploadSuccess: (policy: Policy) => void }> = 
   const [isDragging, setIsDragging] = useState(false);
   const [checkTampering, setCheckTampering] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+
+  const clearMutation = useMutation({
+    mutationFn: async () => {
+      // Use standard fetch if api helper doesn't support empty body post well, but api.post works.
+      const formData = new FormData();
+      return api.post('/policy/clear', formData, true);
+    },
+    onSuccess: () => {
+      mutation.reset();
+      queryClient.invalidateQueries();
+      window.location.reload(); // Hard reset to clear all dashboard states
+    },
+    onError: (error: any) => {
+      setUploadError(error.message || "Failed to clear policies");
+    }
+  });
+
+  const handleClearPolicies = () => {
+    if (confirm("Are you sure you want to clear all policies and audit logs? This cannot be undone.")) {
+      clearMutation.mutate();
+    }
+  };
 
   const mutation = useMutation({
     mutationFn: async (file: File) => {
@@ -85,6 +108,15 @@ const PolicyUploader: React.FC<{ onUploadSuccess: (policy: Policy) => void }> = 
             )}
           </label>
         </div>
+
+        <button
+          onClick={handleClearPolicies}
+          disabled={clearMutation.isPending}
+          className="flex items-center gap-2 px-4 py-2 bg-destructive/10 text-destructive border border-destructive/20 rounded-lg hover:bg-destructive/20 transition-colors shadow-sm ml-4"
+        >
+          <Trash2 className="w-4 h-4" />
+          <span className="text-sm font-medium">{clearMutation.isPending ? 'Clearing...' : 'Reset System'}</span>
+        </button>
       </div>
 
       {/* DROPZONE */}
