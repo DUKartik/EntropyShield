@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from services.compliance_monitor import run_compliance_check
 from services.database_connector import get_db_connection
 from services.pipeline_orchestrator import analyze_structural
-from services.policy_engine import extract_rules_from_text, get_all_policies, save_policy, get_policy_by_name
+from services.policy_engine import extract_rules_from_document, get_all_policies, save_policy, get_policy_by_name
 from utils.debug_logger import get_logger
 
 logger = get_logger()
@@ -62,21 +62,14 @@ async def upload_policy(
                 )
             logger.info("Policy tamper check passed.")
 
-        # ── Text extraction ───────────────────────────────────────────────────
-        text = ""
-        from pypdf import PdfReader  # noqa: PLC0415
-        reader = PdfReader(str(temp_path))
-        for page in reader.pages:
-            extracted = page.extract_text()
-            if extracted:
-                text += extracted + "\n"
-
         # ── AI rule extraction & persistence ─────────────────────────────────
-        rules = extract_rules_from_text(text, file.filename)
+        # Note: We now pass the absolute path of the PDF directly to Vertex AI 
+        # for Multimodal OCR extraction instead of doing local text parsing.
+        rules = extract_rules_from_document(str(temp_path), file.filename)
         
         # Prevent saving Null or empty policies
         if not rules:
-            raise HTTPException(status_code=400, detail="No compliance rules could be extracted from this document. Policy is empty or invalid.")
+            raise HTTPException(status_code=400, detail="No compliance rules could be extracted from this document." )
 
         # Prevent duplicate rows by reusing the same policy ID if the filename was uploaded before
         existing_policy_id = get_policy_by_name(file.filename)

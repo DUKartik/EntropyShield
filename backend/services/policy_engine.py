@@ -1,9 +1,11 @@
 import json
 import os
-import re
 import sqlite3
 from datetime import datetime, timezone
 from typing import Any
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # vertexai and GenerativeModel are NOT imported at module level because
 # google-cloud-aiplatform has a heavy import chain (~28 s on first load).
@@ -18,90 +20,206 @@ logger = get_logger()
 project_id = os.getenv("GCP_PROJECT_ID", os.getenv("GOOGLE_CLOUD_PROJECT", "veridoc-frontend-808108840598"))
 location = os.getenv("REGION", "asia-south1")
 
-def load_gemini_pro():
-    import google.generativeai as genai
+def _get_db_schema() -> str:
+    """Dynamically extracts the SQLite schema to provide accurate context to the LLM."""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+        tables = cursor.fetchall()
+        schema_def = "\n".join([t[0] for t in tables if t[0]])
+        return schema_def
+    except Exception as e:
+        logger.error(f"Failed to read DB schema: {e}")
+        return "Schema unavailable"
+    finally:
+        conn.close()
+
+def _validate_sql_locally(query: str) -> str:
+    """Executes EXPLAIN QUERY PLAN or LIMIT 0 to validate syntax against the real DB."""
+    if not query.strip().upper().startswith("SELECT"):
+        return "Error: Query must be a SELECT statement."
     
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        logger.error("GEMINI_API_KEY is not set. Rule extraction will likely fail.")
-    else:
-        genai.configure(api_key=api_key)
+    # Use LIMIT 0 to validate the query compiles and columns exist without fetching data
+    test_query = f"SELECT * FROM ({query}) LIMIT 0"
+    
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cursor = conn.cursor()
+        cursor.execute(test_query)
+        return "Success: The SQL query is valid."
+    except sqlite3.OperationalError as e:
+        return f"Error: SQLite OperationalError: {str(e)}"
+    except Exception as e:
+        return f"Error: {str(e)}"
+    finally:
+        conn.close()
+
+def extract_rules_from_document(pdf_path: str, policy_name: str) -> list[dict]:
+    """
+    Multimodal Agentic Extraction using Gemini 1.5 Pro with Tools.
+    The AI dynamically reads the raw PDF using OCR, extracts rules, and checks 
+    its SQL queries against the DB schema before returning the JSON.
+    """
+    if not os.path.exists(pdf_path):
+        logger.error(f"Policy document not found at {pdf_path}")
+        return []
+        
+    import vertexai
+    from vertexai.generative_models import GenerativeModel, Tool, FunctionDeclaration, Part
+    
+    # Read the raw PDF bytes
+    with open(pdf_path, "rb") as f:
+        pdf_content = f.read()
+        
+    document_part = Part.from_data(pdf_content, mime_type="application/pdf")
+    
+    try:
+        vertexai.init(project=project_id, location=location)
+    except Exception as e:
+        logger.warning(f"Vertex AI init failed: {e}")
         
     model_name = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-flash")
-    return genai.GenerativeModel(model_name)
+    
+    # 1. Provide the Live Schema
+    db_schema = _get_db_schema()
 
-def extract_rules_from_text(policy_text: str, policy_name: str) -> list[dict]:
+    # 2. Define the Tool for SQL Validation
+    validate_sql_func = FunctionDeclaration(
+        name="validate_sql",
+        description="Validates a SELECT SQL query against the SQLite database. Returns 'Success' if valid, or the SQLite error message if invalid. You MUST use this tool to verify ANY query you intend to output.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The SQL SELECT query to test. It must find policy violations (where a result row means a rule was broken)."
+                }
+            },
+            "required": ["query"]
+        }
+    )
+    sql_tool = Tool(function_declarations=[validate_sql_func])
+
+    # 3. Initialize Model with System Instructions
+    system_instruction = f"""
+You are an expert Compliance Data Engineer. Your goal is to convert a human-readable policy document into executable SQL rules for a SQLite database.
+
+**LIVE DATABASE SCHEMA:**
+```sql
+{db_schema}
+```
+
+**INSTRUCTIONS:**
+1. Identify all distinct compliance rules in the text.
+2. For each rule, formulate a SQL query that selects the VIOLATING records. (A result row means a violation).
+3. **CRITICAL:** You MUST use the `validate_sql` tool to test your queries before finalizing them. Do not guess column names. If a tool call returns an error, adjust the query and test it again until 'Success' is returned.
+4. Once all queries are validated successfully, return a JSON array of objects with the following fields:
+   - "rule_id": Short string ID (e.g., "EXP-001")
+   - "description": Human readable description of the rule.
+   - "quote": The exact text from the policy extracted.
+   - "sql_query": The validated SQL query.
+   - "severity": "HIGH", "MEDIUM", or "LOW".
+
+**OUTPUT FORMAT:**
+When you are done testing, output ONLY the valid JSON array. Do not include markdown or conversational text.
     """
-    Uses Gemini 1.5 Pro to extract executable compliance rules from policy text.
-    Returns a list of rule objects.
-    """
+    
+    model = GenerativeModel(
+        model_name,
+        system_instruction=system_instruction,
+        tools=[sql_tool]
+    )
+
+    chat = model.start_chat()
+    
+    prompt = f"POLICY DOCUMENT TITLE: {policy_name}\n\nPlease read the attached policy document carefully, identify violations, and test your SQL queries."
+    
     try:
-        model = load_gemini_pro()
+        logger.info(f"Starting Multimodal Agentic Extraction for: {policy_name}")
+        response = chat.send_message([document_part, prompt])
         
-        prompt = f"""
-        You are a Compliance Data Data Engineer. Your goal is to convert a human-readable policy document into executable SQL rules for a SQLite database.
-        
-        The database has the following tables:
-        1. expenses (id, employee_id, category, amount, currency, date, description, status, merchant)
-        2. employees (id, name, department, role, manager_id, location)
-        3. contracts (id, vendor_name, amount, start_date, end_date, signed_by, status)
-        
-        POLICY DOCUMENT TITLE: {policy_name}
-        POLICY CONTENT:
-        {policy_text}
-        
-        --------------------------------------------------
-        
-        INSTRUCTIONS:
-        1. Identify all distinct compliance rules in the text.
-        2. For each rule, generate a SQL query that selects the VIOLATING records.
-           - A result means a VIOLATION.
-           - If the policy says "Expenses over 500 must be approved", the query should find expenses over 500 that are NOT approved.
-           - Use generic SQL compatible with SQLite.
-        3. Return a JSON array of objects with these fields:
-           - "rule_id": Short string ID (e.g., "EXP-001")
-           - "description": Human readable description of the rule.
-           - "quote": The exact text from the policy extracted.
-           - "sql_query": The SQL query to find violations.
-           - "severity": "HIGH", "MEDIUM", or "LOW".
-           
-        OUTPUT FORMAT:
-        Return ONLY valid JSON. Do not include markdown formatting or explanations.
-        """
-        
-        response = model.generate_content(prompt)
-        
-        # Clean response (remove markdown backticks if present)
-        text_resp = response.text.strip()
-        if text_resp.startswith("```json"):
-            text_resp = text_resp[7:-3]
-        elif text_resp.startswith("```"):
-            text_resp = text_resp[3:-3]
+        # Agentic Loop: Handle Tool calls up to 10 times to prevent infinite loops
+        max_turns = 10
+        turns = 0
+        while turns < max_turns:
             
-        return json.loads(text_resp)
+            # Helper to safely extract function calls from the Vertex response
+            def get_function_calls(resp):
+                if not resp.candidates: return []
+                fc_list = []
+                for part in resp.candidates[0].content.parts:
+                    if part.function_call:
+                        fc_list.append(part.function_call)
+                return fc_list
+                
+            function_calls = get_function_calls(response)
+            
+            if function_calls:
+                for function_call in function_calls:
+                    if function_call.name == "validate_sql":
+                        # Convert args to dict mapping
+                        query_args = {k: v for k,v in function_call.args.items()}
+                        query = query_args.get("query", "")
+                        
+                        logger.info(f"Agent testing SQL: {query}")
+                        validation_result = _validate_sql_locally(query)
+                        logger.info(f"Agent received: {validation_result}")
+                        
+                        # Send the tool response back to the agent
+                        response = chat.send_message(
+                            Part.from_function_response(
+                                name="validate_sql",
+                                response={"result": validation_result}
+                            )
+                        )
+            else:
+                # No more function calls, the model gave us its final text answer
+                break
+            turns += 1
+
+        if turns >= max_turns:
+            logger.warning("Agentic validation exceeded max turns. Returning best effort response.")
+
+        logger.info(f"Final LLM Response Object: {response}")
         
+        # Parse Final JSON Response
+        try:
+            text_resp = response.text.strip()
+        except ValueError:
+            # Sometimes if there's no text component, response.text raises a ValueError
+            logger.error("No text found in final response.", exc_info=True)
+            text_resp = ""
+            
+        logger.info(f"Raw Text to Parse: '{text_resp}'")
+        
+        if not text_resp:
+            raise ValueError("Empty response text from LLM.")
+            
+        # Try to robustly extract the JSON array in case there is conversational text
+        start_idx = text_resp.find('[')
+        end_idx = text_resp.rfind(']')
+        if start_idx != -1 and end_idx != -1 and end_idx >= start_idx:
+            json_str = text_resp[start_idx:end_idx+1]
+        else:
+            json_str = text_resp
+            
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to decode JSON. Extracted string: {json_str}")
+            raise ValueError(f"Invalid JSON Format: {e}")
+            
     except Exception as e:
-        import traceback
-        traceback.print_exc()
-        logger.error(f"GenAI rule extraction failed: {e}")
-        logger.info("Falling back to mock rules for demonstration.")
-        
-        # FALLBACK MOCK RULES
-        # so the user can test the UI even if they lack GCP permissions
+        logger.error(f"Agentic rule extraction failed: {e}")
+        logger.info("Falling back to absolute mock rules.")
         return [
             {
                 "rule_id": "MOCK-EXP-001",
-                "description": "High value expenses must be approved (Mock Rule)",
+                "description": "High value expenses must be approved (Fallback)",
                 "quote": "Fallback: Expenses over 1000 require approval",
                 "sql_query": "SELECT * FROM expenses WHERE amount > 1000 AND status != 'APPROVED'",
                 "severity": "HIGH"
-            },
-             {
-                "rule_id": "MOCK-EXP-002",
-                "description": "No expenses on weekends (Mock Rule)",
-                "quote": "Fallback: Expenses incurred on Sat/Sun are not reimbursable",
-                "sql_query": "SELECT * FROM expenses WHERE strftime('%w', date) IN ('0', '6')", 
-                "severity": "MEDIUM"
             }
         ]
         
