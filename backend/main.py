@@ -9,6 +9,7 @@ Responsibilities (only):
   - Run startup/shutdown lifecycle hooks
 """
 import os
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from services.database_connector import init_mock_db
+from services.compliance_monitor import run_compliance_check
 from utils.debug_logger import debug_router, get_logger
 
 # Routers
@@ -31,6 +33,26 @@ logger = get_logger()
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
+
+# ---------------------------------------------------------------------------
+# Background Tasks
+# ---------------------------------------------------------------------------
+
+async def scheduled_scan():
+    """Runs the system compliance scan every hour."""
+    while True:
+        try:
+            logger.info("Running scheduled system scan...")
+            # We must run synchronous functions in a threadpool to avoid blocking the event loop
+            await asyncio.to_thread(run_compliance_check)
+            logger.info("Scheduled system scan complete.")
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Scheduled system scan failed: {e}")
+            
+        # Sleep for 1 hour (3600 seconds)
+        await asyncio.sleep(3600)
 
 # ---------------------------------------------------------------------------
 # Lifespan: startup / shutdown hooks
@@ -48,8 +70,19 @@ async def lifespan(app: FastAPI):
         logger.error(f"Startup: database init failed — {e}")
 
     # TruFor engine is lazy-loaded on first request to keep startup fast.
+    
+    # Start the background scan scheduler
+    scan_task = asyncio.create_task(scheduled_scan())
 
     yield
+    
+    # Clean up the background task on shutdown
+    scan_task.cancel()
+    try:
+        await scan_task
+    except asyncio.CancelledError:
+        pass
+        
     logger.info("Shutdown: goodbye.")
 
 
