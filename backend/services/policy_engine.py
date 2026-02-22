@@ -20,32 +20,69 @@ logger = get_logger()
 project_id = os.getenv("GCP_PROJECT_ID", os.getenv("GOOGLE_CLOUD_PROJECT", "veridoc-frontend-808108840598"))
 location = os.getenv("REGION", "asia-south1")
 
-def _get_db_schema() -> str:
-    """Dynamically extracts the SQLite schema to provide accurate context to the LLM."""
+def _list_tables() -> str:
+    """Returns a list of tables in the SQLite database."""
     conn = sqlite3.connect(DB_PATH)
     try:
+        conn.execute("PRAGMA query_only = ON;")
         cursor = conn.cursor()
-        cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
         tables = cursor.fetchall()
-        schema_def = "\n".join([t[0] for t in tables if t[0]])
-        return schema_def
+        return json.dumps([t[0] for t in tables])
     except Exception as e:
-        logger.error(f"Failed to read DB schema: {e}")
-        return "Schema unavailable"
+        logger.error(f"Failed to list tables: {e}")
+        return json.dumps({"error": str(e)})
+    finally:
+        conn.close()
+
+def _get_table_schema(table_name: str) -> str:
+    """Returns the CREATE TABLE statement for a specific table."""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute("PRAGMA query_only = ON;")
+        cursor = conn.cursor()
+        cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table_name,))
+        row = cursor.fetchone()
+        if row:
+            return row[0]
+        return f"Table '{table_name}' not found."
+    except Exception as e:
+        logger.error(f"Failed to get schema for {table_name}: {e}")
+        return f"Error: {e}"
+    finally:
+        conn.close()
+
+def _sample_data(table_name: str) -> str:
+    """Returns 3 sample rows from a specific table to understand data formats."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA query_only = ON;")
+        cursor = conn.cursor()
+        cursor.execute(f"SELECT * FROM {table_name} LIMIT 3")
+        rows = cursor.fetchall()
+        if rows:
+            return json.dumps([dict(row) for row in rows])
+        return "[]" # Empty table
+    except Exception as e:
+        logger.error(f"Failed to sample data from {table_name}: {e}")
+        return f"Error: {e}"
     finally:
         conn.close()
 
 def _validate_sql_locally(query: str) -> str:
-    """Executes EXPLAIN QUERY PLAN or LIMIT 0 to validate syntax against the real DB."""
+    """Executes EXPLAIN QUERY PLAN or LIMIT 0 to validate syntax against the real DB in read-only mode."""
     if not query.strip().upper().startswith("SELECT"):
         return "Error: Query must be a SELECT statement."
     
-    # Use LIMIT 0 to validate the query compiles and columns exist without fetching data
-    test_query = f"SELECT * FROM ({query}) LIMIT 0"
-    
     conn = sqlite3.connect(DB_PATH)
     try:
+        # Prevent DROP/DELETE/INSERT dynamically
+        conn.execute("PRAGMA query_only = ON;")
         cursor = conn.cursor()
+        
+        # We only want to validate, not fetch massive data, so wrap in LIMIT 0
+        test_query = f"SELECT * FROM ({query}) LIMIT 0"
         cursor.execute(test_query)
         return "Success: The SQL query is valid."
     except sqlite3.OperationalError as e:
@@ -57,9 +94,11 @@ def _validate_sql_locally(query: str) -> str:
 
 def extract_rules_from_document(pdf_path: str, policy_name: str) -> list[dict]:
     """
-    Multimodal Agentic Extraction using Gemini 1.5 Pro with Tools.
-    The AI dynamically reads the raw PDF using OCR, extracts rules, and checks 
-    its SQL queries against the DB schema before returning the JSON.
+    Enterprise-Grade Agentic Extraction using Gemini 1.5 Pro.
+    Features:
+    - Exploratory DB tools (list tables, get schemas, sample data)
+    - Safe SQL execution (PRAGMA query_only=ON)
+    - Chain-of-Thought reasoning
     """
     if not os.path.exists(pdf_path):
         logger.error(f"Policy document not found at {pdf_path}")
@@ -79,12 +118,32 @@ def extract_rules_from_document(pdf_path: str, policy_name: str) -> list[dict]:
     except Exception as e:
         logger.warning(f"Vertex AI init failed: {e}")
         
-    model_name = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-flash")
+    model_name = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-pro")
     
-    # 1. Provide the Live Schema
-    db_schema = _get_db_schema()
-
-    # 2. Define the Tool for SQL Validation
+    # 1. Define the Tools for DB Exploration and Validation
+    list_tables_func = FunctionDeclaration(
+        name="list_tables",
+        description="Returns a list of all tables in the SQLite database.",
+        parameters={"type": "object", "properties": {}}
+    )
+    get_schema_func = FunctionDeclaration(
+        name="get_table_schema",
+        description="Returns the CREATE TABLE statement for a specific table so you can see its columns.",
+        parameters={
+            "type": "object",
+            "properties": {"table_name": {"type": "string"}},
+            "required": ["table_name"]
+        }
+    )
+    sample_data_func = FunctionDeclaration(
+        name="sample_data",
+        description="Returns 3 sample rows from a specific table so you can understand data types, formatting, and string values (e.g., 'pending' vs 'PENDING').",
+        parameters={
+            "type": "object",
+            "properties": {"table_name": {"type": "string"}},
+            "required": ["table_name"]
+        }
+    )
     validate_sql_func = FunctionDeclaration(
         name="validate_sql",
         description="Validates a SELECT SQL query against the SQLite database. Returns 'Success' if valid, or the SQLite error message if invalid. You MUST use this tool to verify ANY query you intend to output.",
@@ -99,52 +158,53 @@ def extract_rules_from_document(pdf_path: str, policy_name: str) -> list[dict]:
             "required": ["query"]
         }
     )
-    sql_tool = Tool(function_declarations=[validate_sql_func])
+    
+    agent_tools = Tool(function_declarations=[
+        list_tables_func, get_schema_func, sample_data_func, validate_sql_func
+    ])
 
-    # 3. Initialize Model with System Instructions
-    system_instruction = f"""
+    # 2. Initialize Model with System Instructions
+    system_instruction = '''
 You are an expert Compliance Data Engineer. Your goal is to convert a human-readable policy document into executable SQL rules for a SQLite database.
 
-**LIVE DATABASE SCHEMA:**
-```sql
-{db_schema}
-```
-
 **INSTRUCTIONS:**
-1. Identify all distinct compliance rules in the text.
-2. For each rule, formulate a SQL query that selects the VIOLATING records. (A result row means a violation).
-3. **CRITICAL:** You MUST use the `validate_sql` tool to test your queries before finalizing them. Do not guess column names. If a tool call returns an error, adjust the query and test it again until 'Success' is returned.
-4. Once all queries are validated successfully, return a JSON array of objects with the following fields:
-   - "rule_id": Short string ID (e.g., "EXP-001")
-   - "description": Human readable description of the rule.
-   - "quote": The exact text from the policy extracted.
-   - "sql_query": The validated SQL query.
-   - "severity": "HIGH", "MEDIUM", or "LOW".
+1. **Explore:** You don't know the DB schema yet. Use `list_tables`, `get_table_schema`, and `sample_data` to explore the database and find relevant tables and exact data values to match against.
+2. **Identify:** Find all distinct compliance rules in the document.
+3. **Formulate & Test:** For each rule, formulate a SQL query that selects the VIOLATING records (a resulting row means a violation). You MUST use the `validate_sql` tool to test your queries. Adjust query if it fails.
+4. **Final Output Format:** Once all queries are successfully validated, output the final rules as a JSON array of objects. Do not use markdown wrappers, just raw JSON.
 
-**OUTPUT FORMAT:**
-When you are done testing, output ONLY the valid JSON array. Do not include markdown or conversational text.
-    """
+**SCHEMA FOR FINAL JSON ARRAY ITEMS:**
+{
+  "rule_id": "EXP-001",
+  "description": "Human readable description",
+  "quote": "Exact policy text",
+  "chain_of_thought": "My reasoning for this SQL logic...",
+  "sql_query": "SELECT * FROM ...",
+  "severity": "HIGH", "MEDIUM", or "LOW"
+}
+'''
     
     model = GenerativeModel(
         model_name,
         system_instruction=system_instruction,
-        tools=[sql_tool]
+        tools=[agent_tools],
+        # Explicitly request JSON output as a Structured Output constraint
+        generation_config={"response_mime_type": "application/json"}
     )
 
     chat = model.start_chat()
     
-    prompt = f"POLICY DOCUMENT TITLE: {policy_name}\n\nPlease read the attached policy document carefully, identify violations, and test your SQL queries."
+    prompt = f"POLICY DOCUMENT TITLE: {policy_name}\n\nPlease read the attached policy document carefully, explore the DB, identify violations, test queries, and output the final JSON array of rules."
     
     try:
-        logger.info(f"Starting Multimodal Agentic Extraction for: {policy_name}")
+        logger.info(f"Starting Enterprise Agentic Extraction for: {policy_name}")
         response = chat.send_message([document_part, prompt])
         
-        # Agentic Loop: Handle Tool calls up to 10 times to prevent infinite loops
-        max_turns = 10
+        # Agentic Loop: Handle Tool calls up to 15 times to allow deep exploration
+        max_turns = 15
         turns = 0
         while turns < max_turns:
             
-            # Helper to safely extract function calls from the Vertex response
             def get_function_calls(resp):
                 if not resp.candidates: return []
                 fc_list = []
@@ -156,63 +216,64 @@ When you are done testing, output ONLY the valid JSON array. Do not include mark
             function_calls = get_function_calls(response)
             
             if function_calls:
+                tool_responses = []
                 for function_call in function_calls:
-                    if function_call.name == "validate_sql":
-                        # Convert args to dict mapping
-                        query_args = {k: v for k,v in function_call.args.items()}
-                        query = query_args.get("query", "")
-                        
-                        logger.info(f"Agent testing SQL: {query}")
-                        validation_result = _validate_sql_locally(query)
-                        logger.info(f"Agent received: {validation_result}")
-                        
-                        # Send the tool response back to the agent
-                        response = chat.send_message(
-                            Part.from_function_response(
-                                name="validate_sql",
-                                response={"result": validation_result}
-                            )
-                        )
-            else:
-                # No more function calls, the model gave us its final text answer.
-                # Let's actively validate if it's correct JSON before breaking.
-                try:
-                    text_resp = response.text.strip()
-                except ValueError:
-                    text_resp = ""
+                    func_name = function_call.name
+                    args = {k: v for k,v in function_call.args.items()}
                     
+                    logger.info(f"Agent using tool: {func_name} with args: {args}")
+                    
+                    result = ""
+                    if func_name == "list_tables":
+                        result = _list_tables()
+                    elif func_name == "get_table_schema":
+                        result = _get_table_schema(args.get("table_name", ""))
+                    elif func_name == "sample_data":
+                        result = _sample_data(args.get("table_name", ""))
+                    elif func_name == "validate_sql":
+                        result = _validate_sql_locally(args.get("query", ""))
+                    
+                    # Truncate result for logging
+                    trunc_result = str(result)[:100] + "..." if len(str(result)) > 100 else str(result)
+                    logger.info(f"Tool {func_name} result: {trunc_result}")
+                    
+                    tool_responses.append(
+                        Part.from_function_response(
+                            name=func_name,
+                            response={"result": result}
+                        )
+                    )
+                
+                # Send all tool responses back in one turn
+                response = chat.send_message(tool_responses)
+            else:
+                # No function calls, expecting final JSON payload
+                text_resp = response.text.strip()
                 if not text_resp:
                     logger.warning("Agent returned empty text. Prompting to retry.")
-                    response = chat.send_message("Error: You returned an empty response. You must return a JSON array of rules.")
+                    response = chat.send_message("Error: Empty response. Return the final JSON array.")
                     turns += 1
                     continue
                     
-                start_idx = text_resp.find('[')
-                end_idx = text_resp.rfind(']')
-                if start_idx != -1 and end_idx != -1 and end_idx >= start_idx:
-                    json_str = text_resp[start_idx:end_idx+1]
-                else:
-                    json_str = text_resp
-                    
                 try:
-                    parsed_json = json.loads(json_str)
+                    parsed_json = json.loads(text_resp)
                     logger.info("Agent successfully output valid JSON rules.")
                     return parsed_json
                 except json.JSONDecodeError as e:
-                    logger.warning(f"Agent output invalid JSON. Prompting to fix. Error: {e}")
+                    logger.warning(f"JSON parsing failed. Forcing retry. Error: {e}")
                     response = chat.send_message(
-                        f"Error: Your output was not a valid JSON array. JSON Parsing Error: {e}\n\n"
-                        "You must output ONLY the valid JSON array of rules. Do not include markdown blocks or conversational text. Try again."
+                        f"Your output was not valid JSON. Error: {e}. Output ONLY raw JSON array without markdown blocks."
                     )
-                    
+            
             turns += 1
 
-        logger.warning("Agentic validation exceeded max turns. Returning best effort response.")
-        raise ValueError("Agent failed to output valid JSON rules after 10 turns.")
+        logger.warning("Agentic exploration exceeded max turns.")
+        raise ValueError("Agent failed to output valid JSON rules after time limit.")
         
     except Exception as e:
         logger.error(f"Agentic rule extraction failed: {e}")
         raise ValueError(f"Failed to extract rules from document: {e}")
+
         
 # ---------------------------------------------------------------------------
 # Policy Storage — SQLite-backed (persists across restarts)
