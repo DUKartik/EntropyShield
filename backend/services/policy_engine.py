@@ -174,42 +174,42 @@ When you are done testing, output ONLY the valid JSON array. Do not include mark
                             )
                         )
             else:
-                # No more function calls, the model gave us its final text answer
-                break
+                # No more function calls, the model gave us its final text answer.
+                # Let's actively validate if it's correct JSON before breaking.
+                try:
+                    text_resp = response.text.strip()
+                except ValueError:
+                    text_resp = ""
+                    
+                if not text_resp:
+                    logger.warning("Agent returned empty text. Prompting to retry.")
+                    response = chat.send_message("Error: You returned an empty response. You must return a JSON array of rules.")
+                    turns += 1
+                    continue
+                    
+                start_idx = text_resp.find('[')
+                end_idx = text_resp.rfind(']')
+                if start_idx != -1 and end_idx != -1 and end_idx >= start_idx:
+                    json_str = text_resp[start_idx:end_idx+1]
+                else:
+                    json_str = text_resp
+                    
+                try:
+                    parsed_json = json.loads(json_str)
+                    logger.info("Agent successfully output valid JSON rules.")
+                    return parsed_json
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Agent output invalid JSON. Prompting to fix. Error: {e}")
+                    response = chat.send_message(
+                        f"Error: Your output was not a valid JSON array. JSON Parsing Error: {e}\n\n"
+                        "You must output ONLY the valid JSON array of rules. Do not include markdown blocks or conversational text. Try again."
+                    )
+                    
             turns += 1
 
-        if turns >= max_turns:
-            logger.warning("Agentic validation exceeded max turns. Returning best effort response.")
-
-        logger.info(f"Final LLM Response Object: {response}")
+        logger.warning("Agentic validation exceeded max turns. Returning best effort response.")
+        raise ValueError("Agent failed to output valid JSON rules after 10 turns.")
         
-        # Parse Final JSON Response
-        try:
-            text_resp = response.text.strip()
-        except ValueError:
-            # Sometimes if there's no text component, response.text raises a ValueError
-            logger.error("No text found in final response.", exc_info=True)
-            text_resp = ""
-            
-        logger.info(f"Raw Text to Parse: '{text_resp}'")
-        
-        if not text_resp:
-            raise ValueError("Empty response text from LLM.")
-            
-        # Try to robustly extract the JSON array in case there is conversational text
-        start_idx = text_resp.find('[')
-        end_idx = text_resp.rfind(']')
-        if start_idx != -1 and end_idx != -1 and end_idx >= start_idx:
-            json_str = text_resp[start_idx:end_idx+1]
-        else:
-            json_str = text_resp
-            
-        try:
-            return json.loads(json_str)
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to decode JSON. Extracted string: {json_str}")
-            raise ValueError(f"Invalid JSON Format: {e}")
-            
     except Exception as e:
         logger.error(f"Agentic rule extraction failed: {e}")
         raise ValueError(f"Failed to extract rules from document: {e}")
